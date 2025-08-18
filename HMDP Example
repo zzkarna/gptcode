@@ -1,0 +1,254 @@
+import React, { useMemo, useState } from "react";
+import { ChevronRight, TrendingUp, Goal, Layers, Clock3, Grid, Filter, Info, Zap } from "lucide-react";
+
+// --- Timeframes (12) ---
+const TF = [
+  "1m", "3m", "5m", "10m", "15m", "30m", "45m", "1h", "2h", "4h", "6h", "1d"
+];
+
+// Map to minutes for ordering & comparisons
+const TF_MINUTES: Record<string, number> = {
+  "1m": 1,
+  "3m": 3,
+  "5m": 5,
+  "10m": 10,
+  "15m": 15,
+  "30m": 30,
+  "45m": 45,
+  "1h": 60,
+  "2h": 120,
+  "4h": 240,
+  "6h": 360,
+  "1d": 1440,
+};
+
+// Deterministic pseudo-probs so the UI is illustrative without real data
+function clamp(x: number, lo = 0, hi = 1) { return Math.min(hi, Math.max(lo, x)); }
+function samplePairStats(iIdx: number, jIdx: number) {
+  // Make bounce more likely when HTF (i) is slower than LTF (j)
+  const iSlow = TF_MINUTES[TF[iIdx]];
+  const jFast = TF_MINUTES[TF[jIdx]];
+  const rel = clamp((jFast - iSlow) / (1440)); // ~0..1 across grid
+  const pBounce = clamp(0.35 + 0.4 * rel + (iIdx % 3 - 1) * 0.03 - (jIdx % 2) * 0.02);
+  const pBreak = clamp(1 - pBounce - 0.05, 0, 1); // leave a little mass for "drift"
+  const pDrift = clamp(1 - pBounce - pBreak, 0, 1);
+  return { pBounce, pBreak, pDrift };
+}
+
+// Example state schema (compact): SIDE|REGIME|POS|BUCKET|AGE
+const SIDES = ["SUP", "RES"] as const;
+const REGIMES = ["B", "S"] as const;
+const POS = ["above", "below"] as const;
+const BUCKETS = ["touch", "near", "far"] as const;
+const AGE = ["Y", "M", "O"] as const;
+
+function exampleStates(limit = 8) {
+  const arr: string[] = [];
+  for (let a of SIDES) for (let b of REGIMES) for (let c of POS) for (let d of BUCKETS) for (let e of AGE) {
+    arr.push(`${a}|${b}|${c}|${d}|${e}`);
+  }
+  // deterministic pick spread across dimensions
+  const step = Math.max(1, Math.floor(arr.length / limit));
+  return arr.filter((_, k) => k % step === 0).slice(0, limit);
+}
+
+function HeatBar({ value }: { value: number }) {
+  const pct = Math.round(value * 100);
+  return (
+    <div className="w-full h-2 rounded bg-gray-200 overflow-hidden">
+      <div className="h-2 rounded" style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
+function CellBadge({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="min-w-14 text-gray-600">{label}</span>
+      <div className="flex-1">
+        <div className="w-full h-2 bg-gray-100 rounded overflow-hidden">
+          <div className="h-2 rounded" style={{ width: `${Math.round(value * 100)}%` }} />
+        </div>
+      </div>
+      <span className="w-10 text-right tabular-nums text-gray-700">{(value*100).toFixed(0)}%</span>
+    </div>
+  );
+}
+
+export default function HierarchicalMDPVisualizer() {
+  const [filterMode, setFilterMode] = useState<"i<j" | "i>j" | "all">("i<j");
+  const [selected, setSelected] = useState<{ i: number; j: number } | null>(null);
+
+  const gridPairs = useMemo(() => {
+    return TF.flatMap((ti, i) => TF.map((tj, j) => ({ i, j }))).filter(({ i, j }) => i !== j);
+  }, []);
+
+  const shownPairs = gridPairs.filter(({ i, j }) => {
+    if (filterMode === "all") return true;
+    const slowFirst = TF_MINUTES[TF[i]] > TF_MINUTES[TF[j]]; // i slower than j
+    return filterMode === "i>j" ? slowFirst : !slowFirst;
+  });
+
+  const active = selected ?? shownPairs[0] ?? { i: 0, j: 1 };
+  const stats = samplePairStats(active.i, active.j);
+
+  return (
+    <div className="p-6 space-y-6 text-sm">
+      <header className="space-y-2">
+        <h1 className="text-2xl font-semibold">Hierarchical Markov Decision Process — Multi‑Timeframe Mental Model</h1>
+        <p className="text-gray-600 max-w-3xl">
+          Visual guide to how we go from <em>structure</em> (levels on one timeframe) → <em>interactions</em> (another timeframe touching those levels) →
+          <em> options</em> (bounce/break policies) → <em>execution</em> (orders), all within a nested / hierarchical (semi‑)MDP.
+        </p>
+      </header>
+
+      {/* Layered overview */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="p-4 rounded-2xl shadow bg-white border">
+          <div className="flex items-center gap-2 mb-2"><Layers className="w-4 h-4"/><span className="font-medium">Layer 0 — Context / Regime</span></div>
+          <ul className="list-disc pl-5 space-y-1 text-gray-700">
+            <li>Select pair(s): <code>TFᵢ → TFⱼ</code> (e.g., 1D→1H, 4H→15M).</li>
+            <li>Choose pattern family: Bounce vs Breakout.</li>
+            <li>Pick matrix by regime (Bull/Bear).</li>
+          </ul>
+        </div>
+        <div className="p-4 rounded-2xl shadow bg-white border">
+          <div className="flex items-center gap-2 mb-2"><ChevronRight className="w-4 h-4"/><span className="font-medium">Layer 1 — Options (Semi‑MDP)</span></div>
+          <ul className="list-disc pl-5 space-y-1 text-gray-700">
+            <li>Option = policy with initiation <em>𝓘</em>, termination <em>β</em>.</li>
+            <li>Examples: Bounce‑Long(SUP), Breakout‑Short(RES).</li>
+            <li>Evaluate EV via absorbing‑chain: P(Target/Stop), duration.</li>
+          </ul>
+        </div>
+        <div className="p-4 rounded-2xl shadow bg-white border">
+          <div className="flex items-center gap-2 mb-2"><TrendingUp className="w-4 h-4"/><span className="font-medium">Layer 2 — Execution</span></div>
+          <ul className="list-disc pl-5 space-y-1 text-gray-700">
+            <li>Translate option action → orders (size, stops/TP, costs).</li>
+            <li>Risk caps (volatility, drawdown), cooldowns, capacity.</li>
+          </ul>
+        </div>
+      </section>
+
+      {/* Pairwise grid */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-gray-700"><Grid className="w-4 h-4"/><span className="font-medium">Pairwise interactions (levels from TFᵢ, price on TFⱼ)</span></div>
+          <div className="flex items-center gap-2">
+            <Filter className="w-4 h-4"/>
+            <select className="border rounded-md px-2 py-1" value={filterMode} onChange={e=>setFilterMode(e.target.value as any)}>
+              <option value="i<j">Show faster→slower (price on slower)</option>
+              <option value="i>j">Show slower→faster (price on faster)</option>
+              <option value="all">Show all pairs</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="overflow-auto border rounded-2xl">
+          <table className="min-w-[900px] w-full text-xs">
+            <thead className="sticky top-0 bg-gray-50">
+              <tr>
+                <th className="p-2 text-left text-gray-600">TFᵢ → TFⱼ</th>
+                {TF.map((tj, j) => (
+                  <th key={j} className="p-2 text-gray-600 text-center">{tj}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {TF.map((ti, i) => (
+                <tr key={i} className="border-t">
+                  <td className="p-2 font-medium text-gray-700 bg-gray-50 sticky left-0">{ti}</td>
+                  {TF.map((tj, j) => {
+                    if (i === j) {
+                      return <td key={j} className="p-2 bg-white/50 text-center text-gray-300">—</td>;
+                    }
+                    const show = shownPairs.some(p => p.i===i && p.j===j);
+                    if (!show) return <td key={j} className="p-2 bg-gray-50/40"/>;
+                    const { pBounce, pBreak, pDrift } = samplePairStats(i, j);
+                    const isActive = selected && selected.i===i && selected.j===j;
+                    return (
+                      <td key={j} className={`p-2 cursor-pointer ${isActive?"bg-emerald-50 border border-emerald-200":"hover:bg-gray-50"}`} onClick={()=>setSelected({i,j})}>
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-gray-500">bounce</span>
+                            <span className="text-[10px] tabular-nums">{Math.round(pBounce*100)}%</span>
+                          </div>
+                          <div className="w-full h-1 bg-gray-200"><div className="h-1" style={{width:`${Math.round(pBounce*100)}%`}}/></div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-gray-500">break</span>
+                            <span className="text-[10px] tabular-nums">{Math.round(pBreak*100)}%</span>
+                          </div>
+                          <div className="w-full h-1 bg-gray-200"><div className="h-1" style={{width:`${Math.round(pBreak*100)}%`}}/></div>
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* Detail panel for the selected pair */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 p-4 rounded-2xl shadow bg-white border">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2 text-gray-700"><Info className="w-4 h-4"/><span className="font-medium">Selected pair</span></div>
+            <code className="px-2 py-1 rounded bg-gray-100 text-gray-700">{TF[active.i]} → {TF[active.j]}</code>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <div className="text-xs text-gray-500 uppercase">Transition snapshot</div>
+              <CellBadge label="P(bounce)" value={stats.pBounce} />
+              <CellBadge label="P(break)" value={stats.pBreak} />
+              <CellBadge label="P(drift)" value={stats.pDrift} />
+              <p className="text-[11px] text-gray-500">Illustrative only — real probabilities are computed from your log of state transitions per pair.</p>
+            </div>
+            <div className="space-y-2">
+              <div className="text-xs text-gray-500 uppercase">State schema (current)</div>
+              <div className="rounded-xl border p-2 text-[11px] text-gray-700 bg-gray-50">
+                SIDE|REGIME|POS|BUCKET|AGE
+                <div className="mt-1 text-gray-500">= {"{"}SUP, RES{"}"} | {"{"}B, S{"}"} | {"{"}above, below{"}"} | {"{"}touch, near, far{"}"} | {"{"}Y, M, O{"}"}</div>
+              </div>
+              <div className="text-xs text-gray-500 uppercase">Example states</div>
+              <div className="grid grid-cols-2 gap-2">
+                {exampleStates().map(s => (
+                  <div key={s} className="px-2 py-1 rounded-lg bg-white border text-[11px]">{s}</div>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <div className="text-xs text-gray-500 uppercase">Option idea (Bounce‑Long)</div>
+              <div className="rounded-xl border p-3 bg-white space-y-2 text-[12px]">
+                <div><span className="font-medium">Initiation 𝓘:</span> SUP|B|above|touch|Y</div>
+                <div><span className="font-medium">Termination β:</span> target = above|near→far; stop = cross below level by ≥ buffer×ATR.</div>
+                <div className="flex items-center gap-2 text-gray-600"><Goal className="w-4 h-4"/><span>Evaluate EV with absorbing chain (Target/Stop/Timeout).</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        {/* Mini flow diagram */}
+        <div className="p-4 rounded-2xl shadow bg-white border">
+          <div className="flex items-center gap-2 mb-2 text-gray-700"><Clock3 className="w-4 h-4"/><span className="font-medium">Nested / Hierarchical flow</span></div>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <div className="px-3 py-2 rounded-xl bg-gray-100">Regime</div>
+              <ChevronRight className="w-4 h-4"/>
+              <div className="px-3 py-2 rounded-xl bg-gray-100">Pick Pair i→j</div>
+              <ChevronRight className="w-4 h-4"/>
+              <div className="px-3 py-2 rounded-xl bg-gray-100">Option (Bounce/Break)</div>
+              <ChevronRight className="w-4 h-4"/>
+              <div className="px-3 py-2 rounded-xl bg-gray-100">Execution</div>
+            </div>
+            <div className="text-[12px] text-gray-600">Options are semi‑Markov: they last multiple bars until termination; EV uses the absorbing‑chain math on your per‑pair transition matrix.</div>
+            <div className="flex items-center gap-2 text-[12px] text-gray-600"><Zap className="w-4 h-4"/><span>Use thresholds: P(Target) ≥ p*, EV ≥ 0, duration ≤ max bars, risk ≤ budget.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <footer className="text-[11px] text-gray-500">
+        Tip: Start with a few pairs (1D→1H, 4H→1H, 1H→5M). Once your logger writes real transition matrices, wire those into this view to replace the illustrative numbers.
+      </footer>
+    </div>
+  );
+}
