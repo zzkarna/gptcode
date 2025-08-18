@@ -1,0 +1,315 @@
+import React, { useMemo, useState } from "react";
+import { Search, BookOpen, Network, HelpCircle, Link as LinkIcon, Layers, Sigma, Zap, TrendingUp, ShieldAlert } from "lucide-react";
+
+// --- Data Model -------------------------------------------------------------
+// Each term has: id, label, category, aliases, definition, why, notes, formula,
+// examples, pitfalls, connections (ids of related terms)
+
+const TERMS = [
+  // Data Layer
+  { id: "data_mirror", label: "Data Mirror", category: "Data Layer", aliases:["local mirror","cache"],
+    definition: "A local, append-only store of raw & processed market data with provenance so backtests are fast, offline, and repeatable.",
+    why: "Eliminates API flakiness, enables deterministic experiments, and speeds I/O.",
+    notes: "Keep raw (as-downloaded) and processed (clean, aligned, UTC). Save meta JSON (source, params, hash).",
+    examples: "data/raw/yahoo/SPY/1d.parquet → data/processed/SPY_1d.parquet",
+    pitfalls: "Mixing timezones; re-downloading with different adjustments; silently forward-filling prices.",
+    connections: ["provenance","processed","feature","state","backtest","lean"] },
+  { id: "provenance", label: "Provenance", category: "Data Layer",
+    definition: "Metadata describing where, when, and how the data was obtained (endpoint, params, time, checksum).",
+    why: "Lets you reproduce results and audit data integrity.",
+    connections: ["data_mirror","processed"] },
+  { id: "processed", label: "Processed Data", category: "Data Layer",
+    definition: "Cleaned, schema-consistent dataset (UTC timestamps, monotone, computed returns/vol).",
+    why: "Downstream models assume consistent columns and lagged features.",
+    connections: ["feature","state","backtest"] },
+
+  // Features & States
+  { id: "feature", label: "Feature", category: "Features/States",
+    definition: "Any computed series used to define market conditions (returns, volatility, regime flags).",
+    why: "Features are the raw material for state definitions and policies.",
+    examples: "ret_1d, vol_20d, distance_to_level/ATR, HTF_trend",
+    connections: ["state","discretization","markov_chain"] },
+  { id: "state", label: "State", category: "Features/States",
+    definition: "A compact descriptor of the market at a bar used by the Markov/MDP (e.g., return-quantile × vol-quantile × level proximity).",
+    why: "States make the problem finite and learnable; decisions depend only on current state.",
+    examples: "SUP|B|above|touch|Y",
+    pitfalls: "Too many states → sparsity; too few → miss structure.",
+    connections: ["discretization","transition_matrix","mdp","smdp","options"] },
+  { id: "discretization", label: "Discretization", category: "Features/States",
+    definition: "Mapping continuous features to buckets (quantiles, k-means, thresholds).",
+    why: "Enables counting-based probabilities and small transition matrices.",
+    pitfalls: "Look-ahead leakage; unstable cutpoints; regime shifts.",
+    connections: ["state","transition_matrix","laplace"] },
+
+  // Markov Chains
+  { id: "markov_chain", label: "Markov Chain (MC)", category: "Markov/Regimes",
+    definition: "A memoryless process where P(X_{t+1}=j | X_t=i) = P_{ij}.",
+    why: "Models how your states evolve; foundation for option EV via absorbing chains.",
+    formula: "P_{ij} = count(i→j) / ∑_k count(i→k)",
+    connections: ["transition_matrix","stationary","ergodic","absorbing","hmm","regime_switching","mdp"] },
+  { id: "transition_matrix", label: "Transition Matrix P", category: "Markov/Regimes",
+    definition: "Row-normalized probabilities of moving from each state i to j.",
+    why: "Gives next-state distribution; used to compute absorption and expected durations.",
+    notes: "Use Laplace smoothing (add‑1) to avoid zeros, then row-normalize.",
+    connections: ["laplace","absorbing","fundamental","expected_steps","mdp"] },
+  { id: "laplace", label: "Laplace Smoothing", category: "Markov/Regimes",
+    definition: "Add a constant (e.g., 1) to counts before normalizing to avoid zero-probability rows/cols.",
+    why: "Stabilizes probabilities with sparse data.",
+    connections: ["transition_matrix"] },
+  { id: "stationary", label: "Stationary Dist.", category: "Markov/Regimes",
+    definition: "Vector π such that π = πP; long-run fraction of time spent in each state (if exists).",
+    connections: ["ergodic","transition_matrix"] },
+  { id: "ergodic", label: "Ergodic/Irreducible", category: "Markov/Regimes",
+    definition: "Chain reaches any state from any other (irreducible) and has aperiodic behavior; guarantees unique stationary distribution.",
+    connections: ["stationary","transition_matrix"] },
+  { id: "absorbing", label: "Absorbing States", category: "Markov/Regimes",
+    definition: "States that, once entered, cannot be left (e.g., TARGET, STOP, TIMEOUT).",
+    why: "Turn trading options into finite-horizon absorbing chains.",
+    connections: ["fundamental","expected_steps","option_ev"] },
+  { id: "fundamental", label: "Fundamental Matrix N", category: "Markov/Regimes",
+    definition: "N = (I − Q)^{-1} for transient block Q of an absorbing chain.",
+    why: "Gives expected visits to transient states; key to EV and duration.",
+    connections: ["absorbing","expected_steps","option_ev"] },
+  { id: "expected_steps", label: "Expected Steps τ", category: "Markov/Regimes",
+    definition: "τ = N·1 gives expected number of bars before absorption from each start state.",
+    connections: ["fundamental","option_ev"] },
+
+  // Regimes & HMM
+  { id: "hmm", label: "Hidden Markov Model", category: "Markov/Regimes",
+    definition: "Markov chain over hidden regimes with emission distribution for observed data.",
+    why: "Switch matrices/parameters by latent regime (bull/bear/vol).",
+    connections: ["regime_switching","transition_matrix"] },
+  { id: "regime_switching", label: "Regime Switching", category: "Markov/Regimes",
+    definition: "Use separate P (and returns) per regime; regime can be inferred (HMM) or rule-based (MA, volatility).",
+    connections: ["hmm","markov_chain","mdp"] },
+
+  // Decision Processes & Options
+  { id: "mdp", label: "MDP", category: "MDP/Options",
+    definition: "Markov Decision Process: (S, A, P, R, γ). At each bar, choose action to optimize expected return.",
+    connections: ["smdp","options","policy","reward","transition_matrix"] },
+  { id: "smdp", label: "SMDP", category: "MDP/Options",
+    definition: "Semi‑Markov DP where actions (options) last multiple steps with variable duration.",
+    why: "Trades are options that persist until termination (stop/target/timeout).",
+    connections: ["options","option_ev","expected_steps"] },
+  { id: "options", label: "Options (HRL)", category: "MDP/Options",
+    definition: "Temporally-extended actions with initiation set 𝓘, internal policy πₒ, termination βₒ.",
+    why: "Encapsulate bounce/breakout logic as reusable trade macros.",
+    connections: ["smdp","option_ev","policy"] },
+  { id: "option_ev", label: "Option EV", category: "MDP/Options",
+    definition: "Expected value of an option from start state using absorbing-chain math (N, R).",
+    formula: "EV(s₀)= (N·r)[s₀] + B_target·G − B_stop·L",
+    connections: ["fundamental","expected_steps","reward","mdp"] },
+  { id: "policy", label: "Policy", category: "MDP/Options",
+    definition: "Mapping from states to actions/options; top layer selects pair and option; mid layer holds/exits.",
+    connections: ["mdp","options","risk"] },
+  { id: "reward", label: "Reward r(s)", category: "MDP/Options",
+    definition: "Expected next-bar return (after costs) when in position from state s.",
+    why: "Feeds EV calculation; can be state- and side-specific.",
+    connections: ["option_ev","costs"] },
+
+  // Multi‑Timeframe Structure
+  { id: "levels", label: "Levels (SUP/RES)", category: "Multi‑Timeframe",
+    definition: "Horizontal prices derived from swings/streak rules (Pine-like) on a given timeframe.",
+    why: "Anchor states via level proximity (touch/near/far) and side (above/below).",
+    connections: ["pairwise","proximity","atr","state"] },
+  { id: "pairwise", label: "Pairwise TF i→j", category: "Multi‑Timeframe",
+    definition: "Directed interaction: levels from TFᵢ evaluated by price behavior on TFⱼ.",
+    why: "Generates per-pair transition matrices used for options.",
+    connections: ["transition_matrix","proximity","state","smdp"] },
+  { id: "proximity", label: "Proximity Buckets", category: "Multi‑Timeframe",
+    definition: "touch (<0.25×ATRⱼ), near (<1×ATRⱼ), far (≥1×ATRⱼ).",
+    connections: ["atr","state","pairwise"] },
+  { id: "atr", label: "ATR", category: "Multi‑Timeframe",
+    definition: "Average True Range; scale distances and buffers by volatility.",
+    connections: ["proximity","sizing","stops_targets"] },
+
+  // Execution & Risk
+  { id: "stops_targets", label: "Stops / Targets", category: "Execution/Risk",
+    definition: "Termination rules for options; buffer around levels in ATR units.",
+    connections: ["smdp","option_ev","atr"] },
+  { id: "sizing", label: "Position Sizing", category: "Execution/Risk",
+    definition: "Size by risk (ATR, variance target) with caps and cooldowns.",
+    connections: ["risk","costs"] },
+  { id: "costs", label: "Costs & Slippage", category: "Execution/Risk",
+    definition: "Spread + fees + impact; subtract in r(s) and when filling orders.",
+    connections: ["reward","backtest","lean"] },
+  { id: "risk", label: "Risk Constraints", category: "Execution/Risk",
+    definition: "Limits on daily vol, drawdown, exposure; implemented as caps or penalties.",
+    connections: ["policy","sizing"] },
+
+  // Backtesting & Infra
+  { id: "backtest", label: "Backtesting", category: "Backtesting/Infra",
+    definition: "Historical simulation with realistic costs, no look‑ahead, and reproducible data.",
+    connections: ["lean","pine_parity","data_mirror","costs"] },
+  { id: "lean", label: "Lean (QuantConnect)", category: "Backtesting/Infra",
+    definition: "C# engine you’re using to consolidate TFs, log transitions, and trade.",
+    connections: ["backtest","pairwise","options"] },
+  { id: "pine_parity", label: "Pine Parity", category: "Backtesting/Infra",
+    definition: "Port PineScript semantics (indexing, fills, security()) to Python/C# so results match TradingView.",
+    connections: ["backtest","levels","pairwise"] },
+].map((t, idx) => ({ ...t, idx }));
+
+const CATEGORIES = Array.from(new Set(TERMS.map(t => t.category)));
+
+// Quick helpers
+function termById(id) { return TERMS.find(t => t.id === id); }
+function relatedOf(t) { return (t.connections || []).map(termById).filter(Boolean); }
+
+// --- UI Components ---------------------------------------------------------
+
+function Pill({ children, active=false, onClick }){
+  return (
+    <button onClick={onClick} className={`px-2.5 py-1 rounded-full border text-xs mr-1 mb-1 transition ${active?"bg-emerald-50 border-emerald-300":"bg-white hover:bg-gray-50"}`}>
+      {children}
+    </button>
+  );
+}
+
+function Section({ title, icon, children }){
+  const Icon = icon || BookOpen;
+  return (
+    <section className="p-4 rounded-2xl shadow bg-white border space-y-3">
+      <div className="flex items-center gap-2 text-gray-700"><Icon className="w-4 h-4"/><span className="font-medium">{title}</span></div>
+      {children}
+    </section>
+  );
+}
+
+export default function EliteGlossaryMindmap(){
+  const [q, setQ] = useState("");
+  const [activeCat, setActiveCat] = useState<string | null>(null);
+  const [selected, setSelected] = useState(TERMS.find(t=>t.id==='mdp')!);
+
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    return TERMS.filter(t => (!activeCat || t.category === activeCat) && (
+      !s || t.label.toLowerCase().includes(s) || (t.aliases||[]).some(a=>a.toLowerCase().includes(s)) || (t.definition||"").toLowerCase().includes(s)
+    ));
+  }, [q, activeCat]);
+
+  // Mindmap layout: columns by category
+  const byCat = useMemo(() => {
+    const map = new Map<string, any[]>();
+    CATEGORIES.forEach(c => map.set(c, []));
+    filtered.forEach(t => { map.get(t.category)?.push(t); });
+    return map;
+  }, [filtered]);
+
+  return (
+    <div className="p-6 space-y-6 text-sm">
+      <header className="space-y-2">
+        <h1 className="text-2xl font-semibold">Elite Glossary & Mind‑Map — Markov Chain Trading System</h1>
+        <p className="text-gray-600 max-w-4xl">A practitioner’s map from data to hierarchical (semi‑)MDP trading. Click any node to view an elite‑level definition, formulas, pitfalls, and how it connects to everything else.</p>
+      </header>
+
+      <Section title="Explore" icon={Network}>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 border rounded-2xl px-3 py-1.5 bg-white">
+            <Search className="w-4 h-4 text-gray-500"/>
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search terms, aliases, definitions…" className="outline-none text-sm w-64"/>
+          </div>
+          <div className="flex items-center gap-2 text-gray-600"><Layers className="w-4 h-4"/><span className="text-xs">Filter by category:</span></div>
+          <Pill active={!activeCat} onClick={()=>setActiveCat(null)}>All</Pill>
+          {CATEGORIES.map(cat => (
+            <Pill key={cat} active={activeCat===cat} onClick={()=>setActiveCat(activeCat===cat?null:cat)}>{cat}</Pill>
+          ))}
+        </div>
+
+        {/* Mindmap grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mt-4">
+          {Array.from(byCat.entries()).map(([cat, items]) => (
+            <div key={cat} className="rounded-2xl border p-3">
+              <div className="text-xs font-medium text-gray-500 mb-2 uppercase">{cat}</div>
+              <div>
+                {items.length===0 && <div className="text-gray-400 text-xs">No matches.</div>}
+                {items.map(t => (
+                  <Pill key={t.id} active={selected?.id===t.id} onClick={()=>setSelected(t)}>{t.label}</Pill>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <Section title="Definition" icon={BookOpen}>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-lg font-semibold">{selected.label}</div>
+              <div className="text-[11px] text-gray-500">{selected.category}</div>
+            </div>
+            {selected.aliases && selected.aliases.length>0 && (
+              <div className="text-xs text-gray-500">Aliases: {selected.aliases.join(', ')}</div>
+            )}
+            <p className="text-gray-700">{selected.definition}</p>
+            {selected.why && <p className="text-gray-600"><span className="font-medium">Why it matters: </span>{selected.why}</p>}
+            {selected.formula && (
+              <div className="rounded-xl bg-gray-50 border p-3 text-[12px]">
+                <div className="flex items-center gap-2 mb-1 text-gray-700"><Sigma className="w-4 h-4"/><span className="font-medium">Key formula</span></div>
+                <code className="break-all">{selected.formula}</code>
+              </div>
+            )}
+            {selected.examples && (
+              <div className="rounded-xl bg-white border p-3 text-[12px]">
+                <div className="flex items-center gap-2 mb-1 text-gray-700"><TrendingUp className="w-4 h-4"/><span className="font-medium">Examples</span></div>
+                <div>{selected.examples}</div>
+              </div>
+            )}
+            {selected.pitfalls && (
+              <div className="rounded-xl bg-white border p-3 text-[12px]">
+                <div className="flex items-center gap-2 mb-1 text-rose-700"><ShieldAlert className="w-4 h-4"/><span className="font-medium">Pitfalls</span></div>
+                <div className="text-rose-700/90">{selected.pitfalls}</div>
+              </div>
+            )}
+          </div>
+        </Section>
+
+        <Section title="How it connects" icon={LinkIcon}>
+          <div className="text-xs text-gray-600">Click related nodes to jump.</div>
+          <div className="mt-2 flex flex-wrap">
+            {relatedOf(selected).map(r => (
+              <Pill key={r.id} onClick={()=>setSelected(r)}>{r.label}</Pill>
+            ))}
+            {relatedOf(selected).length===0 && <div className="text-gray-400 text-xs">No explicit links.</div>}
+          </div>
+
+          {/* Mini recipe cards for common flows */}
+          <div className="mt-4 grid grid-cols-1 gap-3">
+            <div className="rounded-xl border p-3">
+              <div className="text-xs font-medium text-gray-500 mb-1">Flow — Option EV (Bounce)</div>
+              <div className="text-[12px] text-gray-700">
+                <b>Define</b> states (touch/near/far) → <b>count</b> transitions → <b>build</b> absorbing chain (Q,R) →
+                compute <b>N=(I−Q)⁻¹</b>, <b>B=N·R</b>, <b>τ=N·1</b> →
+                EV = (N·r)[s₀] + B_target·G − B_stop·L.
+              </div>
+            </div>
+            <div className="rounded-xl border p-3">
+              <div className="text-xs font-medium text-gray-500 mb-1">Flow — Hierarchical policy</div>
+              <div className="text-[12px] text-gray-700">
+                Regime → pick pair (i→j) → choose option (bounce/break) with EV≥0 & P(target)≥p* →
+                execution (size, stops/TP, costs) → risk caps/cooldown.
+              </div>
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Cheat‑sheet bullets" icon={Zap}>
+          <ul className="list-disc pl-5 space-y-1 text-gray-700 text-[13px]">
+            <li>State design is the lever: compact, lagged, regime‑aware.</li>
+            <li>Use Laplace(+1) then row‑normalize for P; avoid zeros.</li>
+            <li>Pairwise matrices are by <b>TFᵢ→TFⱼ</b>; interactions update on TFⱼ closes.</li>
+            <li>Options are trades that last multiple bars → treat with SMDP/absorbing chain.</li>
+            <li>Compute EV and duration per entry state; only take positive‑EV with target‑prob ≥ threshold.</li>
+            <li>Costs live in r(s) and fills; size by volatility target and cap per pair.</li>
+            <li>Validate no look‑ahead: all features & levels must be formed on completed bars.</li>
+            <li>Start with few pairs (1D→1H, 4H→1H, 1H→5M), then expand to 12 TFs.</li>
+          </ul>
+        </Section>
+      </div>
+
+      <footer className="text-[11px] text-gray-500">
+        Tip: When your logger emits real transition matrices, we can plug them here and render pair‑specific state lists and EV summaries inline.
+      </footer>
+    </div>
+  );
+}
