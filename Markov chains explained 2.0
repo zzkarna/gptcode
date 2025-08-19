@@ -1,0 +1,979 @@
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import * as d3 from "d3";
+import { 
+  Search, X, Play, Pause, SkipForward, RotateCcw,
+  Maximize2, Minimize2, Download, Info, Eye, EyeOff,
+  BarChart3, Network, TrendingUp, Shuffle
+} from "lucide-react";
+
+// ---------------------------------------------
+// Complete Data Structure
+// ---------------------------------------------
+const GROUPS = {
+  core: { label: "Core", color: "#3b82f6" },
+  types: { label: "Types", color: "#8b5cf6" },
+  tools: { label: "Tools", color: "#f97316" },
+  extensions: { label: "Extensions", color: "#10b981" },
+  applications: { label: "Applications", color: "#eab308" },
+  advanced: { label: "Advanced", color: "#ef4444" }
+};
+
+const TREE_DATA = {
+  name: "Markov Chains",
+  group: "core",
+  description: "Stochastic processes with memoryless property",
+  children: [
+    {
+      name: "Core Concepts",
+      group: "core",
+      children: [
+        { name: "States", group: "core", description: "Possible situations S = {s₁, s₂, ...}" },
+        { name: "Transitions", group: "core", description: "P(Xₜ₊₁=j | Xₜ=i) = Pᵢⱼ" },
+        { name: "Markov Property", group: "core", description: "P(future | past, present) = P(future | present)" },
+        { name: "Transition Matrix", group: "core", description: "Row-stochastic matrix P" }
+      ]
+    },
+    {
+      name: "Chain Types",
+      group: "types",
+      children: [
+        { name: "Discrete Time (DTMC)", group: "types", description: "Time steps t = 0, 1, 2, ..." },
+        { name: "Continuous Time (CTMC)", group: "types", description: "Continuous t ∈ [0, ∞)" },
+        { name: "Finite State", group: "types", description: "|S| < ∞" },
+        { name: "Ergodic", group: "types", description: "Irreducible + aperiodic → unique π" },
+        { name: "Absorbing", group: "types", description: "∃ state i: Pᵢᵢ = 1" },
+        { name: "Reversible", group: "types", description: "πᵢPᵢⱼ = πⱼPⱼᵢ (detailed balance)" }
+      ]
+    },
+    {
+      name: "Analysis Tools",
+      group: "tools",
+      children: [
+        { name: "Stationary Distribution", group: "tools", description: "π = πP, Σπᵢ = 1" },
+        { name: "Fundamental Matrix", group: "tools", description: "N = (I - Q)⁻¹" },
+        { name: "Mixing Time", group: "tools", description: "Time to converge to π" },
+        { name: "Spectral Gap", group: "tools", description: "1 - |λ₂|" },
+        { name: "Mean First Passage", group: "tools", description: "E[Tⱼ | X₀ = i]" }
+      ]
+    },
+    {
+      name: "Extensions",
+      group: "extensions",
+      children: [
+        { name: "MDP", group: "extensions", description: "Markov Decision Process" },
+        { name: "HMM", group: "extensions", description: "Hidden Markov Model" },
+        { name: "MCMC", group: "extensions", description: "Markov Chain Monte Carlo" },
+        { name: "POMDP", group: "extensions", description: "Partially Observable MDP" },
+        { name: "Semi-Markov", group: "extensions", description: "General holding times" }
+      ]
+    },
+    {
+      name: "Applications",
+      group: "applications",
+      children: [
+        { name: "PageRank", group: "applications", description: "Web page importance" },
+        { name: "Finance", group: "applications", description: "Credit ratings, options" },
+        { name: "Queueing", group: "applications", description: "M/M/1, M/G/1 queues" },
+        { name: "Genetics", group: "applications", description: "Evolution, mutations" },
+        { name: "NLP", group: "applications", description: "Language models" }
+      ]
+    },
+    {
+      name: "Advanced Topics",
+      group: "advanced",
+      children: [
+        { name: "Large Deviations", group: "advanced", description: "Rare event probabilities" },
+        { name: "Coupling", group: "advanced", description: "Joint construction technique" },
+        { name: "Entropy Rate", group: "advanced", description: "H(X) = -Σπᵢ ΣPᵢⱼ log Pᵢⱼ" },
+        { name: "Cutoff Phenomenon", group: "advanced", description: "Sharp transition to equilibrium" },
+        { name: "Metastability", group: "advanced", description: "Quasi-stationary distributions" }
+      ]
+    }
+  ]
+};
+
+// Preset examples for quick testing
+const PRESETS = {
+  weather: {
+    name: "Weather Model",
+    size: 3,
+    states: ["Sunny", "Cloudy", "Rainy"],
+    matrix: [
+      [0.7, 0.2, 0.1],
+      [0.3, 0.4, 0.3],
+      [0.2, 0.3, 0.5]
+    ]
+  },
+  random_walk: {
+    name: "Random Walk",
+    size: 5,
+    states: ["0", "1", "2", "3", "4"],
+    matrix: [
+      [0, 1, 0, 0, 0],
+      [0.5, 0, 0.5, 0, 0],
+      [0, 0.5, 0, 0.5, 0],
+      [0, 0, 0.5, 0, 0.5],
+      [0, 0, 0, 1, 0]
+    ]
+  },
+  ehrenfest: {
+    name: "Ehrenfest Urn",
+    size: 4,
+    states: ["0", "1", "2", "3"],
+    matrix: [
+      [0, 1, 0, 0],
+      [0.33, 0, 0.67, 0],
+      [0, 0.67, 0, 0.33],
+      [0, 0, 1, 0]
+    ]
+  }
+};
+
+// ---------------------------------------------
+// Main Component
+// ---------------------------------------------
+export default function MarkovMindmapPro() {
+  // Tree visualization state
+  const [selectedNode, setSelectedNode] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeGroups, setActiveGroups] = useState(new Set(Object.keys(GROUPS)));
+  const [expandedNodes, setExpandedNodes] = useState(new Set(['Markov Chains']));
+  
+  // Calculator state
+  const [showViz, setShowViz] = useState(true);
+  const [vizType, setVizType] = useState('graph'); // 'graph', 'matrix', 'distribution', 'simulation'
+  const [matrixSize, setMatrixSize] = useState(3);
+  const [stateNames, setStateNames] = useState(["A", "B", "C"]);
+  const [matrix, setMatrix] = useState([
+    [0.7, 0.2, 0.1],
+    [0.3, 0.4, 0.3],
+    [0.2, 0.3, 0.5]
+  ]);
+  const [currentState, setCurrentState] = useState(0);
+  const [history, setHistory] = useState([0]);
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [simulationSpeed, setSimulationSpeed] = useState(1000);
+  
+  // Refs
+  const treeRef = useRef(null);
+  const vizRef = useRef(null);
+  const simulationRef = useRef(null);
+  
+  // Build filtered tree
+  const filteredTree = useMemo(() => {
+    function filterNode(node) {
+      const matchesSearch = !searchQuery || 
+        node.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (node.description && node.description.toLowerCase().includes(searchQuery.toLowerCase()));
+      
+      const matchesGroup = activeGroups.has(node.group);
+      
+      if (!node.children) {
+        return matchesSearch && matchesGroup ? { ...node } : null;
+      }
+      
+      const filteredChildren = node.children
+        .map(child => filterNode(child))
+        .filter(Boolean);
+      
+      if (filteredChildren.length > 0 || (matchesSearch && matchesGroup)) {
+        return { ...node, children: filteredChildren };
+      }
+      
+      return null;
+    }
+    
+    return filterNode(TREE_DATA);
+  }, [searchQuery, activeGroups]);
+  
+  // Calculate stationary distribution
+  const stationaryDist = useMemo(() => {
+    try {
+      const n = matrix.length;
+      let pi = Array(n).fill(1/n);
+      
+      for (let iter = 0; iter < 1000; iter++) {
+        const newPi = Array(n).fill(0);
+        for (let j = 0; j < n; j++) {
+          for (let i = 0; i < n; i++) {
+            newPi[j] += pi[i] * matrix[i][j];
+          }
+        }
+        const diff = newPi.reduce((s, v, i) => s + Math.abs(v - pi[i]), 0);
+        pi = newPi;
+        if (diff < 1e-10) break;
+      }
+      return pi;
+    } catch {
+      return null;
+    }
+  }, [matrix]);
+  
+  // Calculate convergence data
+  const convergenceData = useMemo(() => {
+    const n = matrix.length;
+    const steps = 50;
+    const data = [];
+    
+    for (let startState = 0; startState < n; startState++) {
+      let dist = Array(n).fill(0);
+      dist[startState] = 1;
+      
+      for (let t = 0; t <= steps; t++) {
+        data.push({
+          time: t,
+          state: startState,
+          distribution: [...dist],
+          distance: stationaryDist ? 
+            dist.reduce((s, v, i) => s + Math.abs(v - stationaryDist[i]), 0) / 2 : 0
+        });
+        
+        // Update distribution
+        const newDist = Array(n).fill(0);
+        for (let j = 0; j < n; j++) {
+          for (let i = 0; i < n; i++) {
+            newDist[j] += dist[i] * matrix[i][j];
+          }
+        }
+        dist = newDist;
+      }
+    }
+    
+    return data;
+  }, [matrix, stationaryDist]);
+  
+  // Tree visualization
+  useEffect(() => {
+    if (!filteredTree || !treeRef.current) return;
+    
+    const container = d3.select(treeRef.current);
+    container.selectAll("*").remove();
+    
+    const width = treeRef.current.clientWidth;
+    const height = treeRef.current.clientHeight;
+    const radius = Math.min(width, height) / 2 - 100;
+    
+    const svg = container.append("svg")
+      .attr("width", width)
+      .attr("height", height);
+    
+    const g = svg.append("g")
+      .attr("transform", `translate(${width/2},${height/2})`);
+    
+    // Tree layout
+    const tree = d3.tree()
+      .size([2 * Math.PI, radius])
+      .separation((a, b) => (a.parent == b.parent ? 1 : 2) / a.depth);
+    
+    const root = d3.hierarchy(filteredTree);
+    
+    // Filter by expanded nodes
+    root.descendants().forEach(d => {
+      if (!expandedNodes.has(d.data.name) && d.children) {
+        d._children = d.children;
+        d.children = null;
+      }
+    });
+    
+    tree(root);
+    
+    // Links
+    const link = g.selectAll(".link")
+      .data(root.links())
+      .enter().append("path")
+      .attr("class", "link")
+      .attr("fill", "none")
+      .attr("stroke", "#e5e7eb")
+      .attr("stroke-width", 2)
+      .attr("d", d3.linkRadial()
+        .angle(d => d.x)
+        .radius(d => d.y));
+    
+    // Nodes
+    const node = g.selectAll(".node")
+      .data(root.descendants())
+      .enter().append("g")
+      .attr("class", "node")
+      .attr("transform", d => `
+        rotate(${d.x * 180 / Math.PI - 90})
+        translate(${d.y},0)
+      `);
+    
+    // Node circles
+    node.append("circle")
+      .attr("r", d => d.depth === 0 ? 8 : 5)
+      .attr("fill", d => GROUPS[d.data.group]?.color || "#6b7280")
+      .attr("stroke", "#fff")
+      .attr("stroke-width", 2)
+      .style("cursor", "pointer")
+      .on("click", (event, d) => {
+        event.stopPropagation();
+        const name = d.data.name;
+        setExpandedNodes(prev => {
+          const next = new Set(prev);
+          if (next.has(name)) {
+            next.delete(name);
+          } else {
+            next.add(name);
+          }
+          return next;
+        });
+      })
+      .on("mouseover", (event, d) => {
+        setSelectedNode(d.data);
+      });
+    
+    // Labels
+    node.append("text")
+      .attr("dy", ".31em")
+      .attr("x", d => d.x < Math.PI === !d.children ? 6 : -6)
+      .attr("text-anchor", d => d.x < Math.PI === !d.children ? "start" : "end")
+      .attr("transform", d => d.x >= Math.PI ? "rotate(180)" : null)
+      .style("font-size", "11px")
+      .style("fill", "#374151")
+      .text(d => d.data.name);
+    
+    // Zoom
+    const zoom = d3.zoom()
+      .scaleExtent([0.5, 3])
+      .on("zoom", (event) => {
+        g.attr("transform", 
+          `translate(${width/2},${height/2}) scale(${event.transform.k})`
+        );
+      });
+    
+    svg.call(zoom);
+    
+  }, [filteredTree, expandedNodes]);
+  
+  // Markov chain graph visualization
+  useEffect(() => {
+    if (!vizRef.current || vizType !== 'graph') return;
+    
+    const container = d3.select(vizRef.current);
+    container.selectAll("*").remove();
+    
+    const width = vizRef.current.clientWidth;
+    const height = vizRef.current.clientHeight;
+    
+    const svg = container.append("svg")
+      .attr("width", width)
+      .attr("height", height);
+    
+    // Create nodes and links from matrix
+    const nodes = stateNames.slice(0, matrixSize).map((name, i) => ({
+      id: i,
+      name: name,
+      x: width/2 + Math.cos(2 * Math.PI * i / matrixSize) * 120,
+      y: height/2 + Math.sin(2 * Math.PI * i / matrixSize) * 120
+    }));
+    
+    const links = [];
+    for (let i = 0; i < matrixSize; i++) {
+      for (let j = 0; j < matrixSize; j++) {
+        if (matrix[i][j] > 0.01) {
+          links.push({
+            source: i,
+            target: j,
+            value: matrix[i][j]
+          });
+        }
+      }
+    }
+    
+    // Add arrow markers
+    svg.append("defs").selectAll("marker")
+      .data(["arrow"])
+      .enter().append("marker")
+      .attr("id", d => d)
+      .attr("viewBox", "0 -5 10 10")
+      .attr("refX", 25)
+      .attr("refY", 0)
+      .attr("markerWidth", 6)
+      .attr("markerHeight", 6)
+      .attr("orient", "auto")
+      .append("path")
+      .attr("d", "M0,-5L10,0L0,5")
+      .attr("fill", "#6b7280");
+    
+    // Draw links
+    const link = svg.selectAll(".link")
+      .data(links)
+      .enter().append("g");
+    
+    link.append("path")
+      .attr("class", "link")
+      .attr("fill", "none")
+      .attr("stroke", "#9ca3af")
+      .attr("stroke-width", d => Math.max(1, d.value * 5))
+      .attr("marker-end", "url(#arrow)")
+      .attr("d", d => {
+        const dx = nodes[d.target].x - nodes[d.source].x;
+        const dy = nodes[d.target].y - nodes[d.source].y;
+        const dr = Math.sqrt(dx * dx + dy * dy);
+        
+        if (d.source === d.target) {
+          // Self loop
+          return `M${nodes[d.source].x},${nodes[d.source].y}
+                  A30,30 0 1,1 ${nodes[d.source].x + 1},${nodes[d.source].y}`;
+        }
+        return `M${nodes[d.source].x},${nodes[d.source].y}
+                A${dr},${dr} 0 0,1 ${nodes[d.target].x},${nodes[d.target].y}`;
+      });
+    
+    // Link labels
+    link.append("text")
+      .attr("class", "link-label")
+      .attr("x", d => (nodes[d.source].x + nodes[d.target].x) / 2)
+      .attr("y", d => (nodes[d.source].y + nodes[d.target].y) / 2)
+      .attr("text-anchor", "middle")
+      .style("font-size", "10px")
+      .style("fill", "#6b7280")
+      .text(d => d.value.toFixed(2));
+    
+    // Draw nodes
+    const node = svg.selectAll(".node")
+      .data(nodes)
+      .enter().append("g")
+      .attr("class", "node")
+      .attr("transform", d => `translate(${d.x},${d.y})`);
+    
+    node.append("circle")
+      .attr("r", 30)
+      .attr("fill", (d, i) => i === currentState ? "#3b82f6" : "#fff")
+      .attr("stroke", "#6b7280")
+      .attr("stroke-width", 2);
+    
+    node.append("text")
+      .attr("text-anchor", "middle")
+      .attr("dy", ".35em")
+      .style("font-size", "14px")
+      .style("font-weight", "bold")
+      .style("fill", (d, i) => i === currentState ? "#fff" : "#111827")
+      .text(d => d.name);
+    
+    // Stationary distribution labels
+    if (stationaryDist) {
+      node.append("text")
+        .attr("text-anchor", "middle")
+        .attr("dy", "2.5em")
+        .style("font-size", "11px")
+        .style("fill", "#6b7280")
+        .text((d, i) => `π=${stationaryDist[i].toFixed(3)}`);
+    }
+    
+  }, [vizType, matrix, matrixSize, stateNames, currentState, stationaryDist]);
+  
+  // Distribution bar chart
+  useEffect(() => {
+    if (!vizRef.current || vizType !== 'distribution') return;
+    
+    const container = d3.select(vizRef.current);
+    container.selectAll("*").remove();
+    
+    const margin = { top: 20, right: 20, bottom: 40, left: 60 };
+    const width = vizRef.current.clientWidth - margin.left - margin.right;
+    const height = vizRef.current.clientHeight - margin.top - margin.bottom;
+    
+    const svg = container.append("svg")
+      .attr("width", width + margin.left + margin.right)
+      .attr("height", height + margin.top + margin.bottom);
+    
+    const g = svg.append("g")
+      .attr("transform", `translate(${margin.left},${margin.top})`);
+    
+    // Current distribution
+    const currentDist = Array(matrixSize).fill(0);
+    currentDist[currentState] = 1;
+    
+    // Calculate distribution after multiple steps
+    let dist = [...currentDist];
+    for (let step = 0; step < history.length - 1; step++) {
+      const newDist = Array(matrixSize).fill(0);
+      for (let j = 0; j < matrixSize; j++) {
+        for (let i = 0; i < matrixSize; i++) {
+          newDist[j] += dist[i] * matrix[i][j];
+        }
+      }
+      dist = newDist;
+    }
+    
+    // Scales
+    const x = d3.scaleBand()
+      .domain(stateNames.slice(0, matrixSize))
+      .range([0, width])
+      .padding(0.1);
+    
+    const y = d3.scaleLinear()
+      .domain([0, 1])
+      .range([height, 0]);
+    
+    // Axes
+    g.append("g")
+      .attr("transform", `translate(0,${height})`)
+      .call(d3.axisBottom(x));
+    
+    g.append("g")
+      .call(d3.axisLeft(y));
+    
+    // Current distribution bars
+    g.selectAll(".bar-current")
+      .data(dist)
+      .enter().append("rect")
+      .attr("class", "bar-current")
+      .attr("x", (d, i) => x(stateNames[i]))
+      .attr("y", d => y(d))
+      .attr("width", x.bandwidth() / 2)
+      .attr("height", d => height - y(d))
+      .attr("fill", "#3b82f6");
+    
+    // Stationary distribution bars
+    if (stationaryDist) {
+      g.selectAll(".bar-stationary")
+        .data(stationaryDist)
+        .enter().append("rect")
+        .attr("class", "bar-stationary")
+        .attr("x", (d, i) => x(stateNames[i]) + x.bandwidth() / 2)
+        .attr("y", d => y(d))
+        .attr("width", x.bandwidth() / 2)
+        .attr("height", d => height - y(d))
+        .attr("fill", "#10b981");
+    }
+    
+    // Legend
+    const legend = g.append("g")
+      .attr("transform", `translate(${width - 150}, 0)`);
+    
+    legend.append("rect")
+      .attr("x", 0)
+      .attr("y", 0)
+      .attr("width", 15)
+      .attr("height", 15)
+      .attr("fill", "#3b82f6");
+    
+    legend.append("text")
+      .attr("x", 20)
+      .attr("y", 12)
+      .style("font-size", "12px")
+      .text("Current");
+    
+    legend.append("rect")
+      .attr("x", 0)
+      .attr("y", 20)
+      .attr("width", 15)
+      .attr("height", 15)
+      .attr("fill", "#10b981");
+    
+    legend.append("text")
+      .attr("x", 20)
+      .attr("y", 32)
+      .style("font-size", "12px")
+      .text("Stationary");
+    
+  }, [vizType, currentState, matrix, matrixSize, stateNames, stationaryDist, history]);
+  
+  // Convergence visualization
+  useEffect(() => {
+    if (!vizRef.current || vizType !== 'convergence') return;
+    
+    const container = d3.select(vizRef.current);
+    container.selectAll("*").remove();
+    
+    const margin = { top: 20, right: 80, bottom: 40, left: 60 };
+    const width = vizRef.current.clientWidth - margin.left - margin.right;
+    const height = vizRef.current.clientHeight - margin.top - margin.bottom;
+    
+    const svg = container.append("svg")
+      .attr("width", width + margin.left + margin.right)
+      .attr("height", height + margin.top + margin.bottom);
+    
+    const g = svg.append("g")
+      .attr("transform", `translate(${margin.left},${margin.top})`);
+    
+    // Scales
+    const x = d3.scaleLinear()
+      .domain([0, 50])
+      .range([0, width]);
+    
+    const y = d3.scaleLinear()
+      .domain([0, 1])
+      .range([height, 0]);
+    
+    const color = d3.scaleOrdinal(d3.schemeCategory10);
+    
+    // Line generator
+    const line = d3.line()
+      .x(d => x(d.time))
+      .y(d => y(d.value));
+    
+    // Group data by state and probability
+    const series = [];
+    for (let startState = 0; startState < matrixSize; startState++) {
+      for (let targetState = 0; targetState < matrixSize; targetState++) {
+        series.push({
+          key: `${stateNames[startState]}→${stateNames[targetState]}`,
+          values: convergenceData
+            .filter(d => d.state === startState)
+            .map(d => ({
+              time: d.time,
+              value: d.distribution[targetState]
+            }))
+        });
+      }
+    }
+    
+    // Axes
+    g.append("g")
+      .attr("transform", `translate(0,${height})`)
+      .call(d3.axisBottom(x).tickFormat(d => `t=${d}`));
+    
+    g.append("g")
+      .call(d3.axisLeft(y));
+    
+    // Lines
+    const lineGroup = g.selectAll(".line")
+      .data(series)
+      .enter().append("g")
+      .attr("class", "line");
+    
+    lineGroup.append("path")
+      .attr("fill", "none")
+      .attr("stroke", d => color(d.key))
+      .attr("stroke-width", 1.5)
+      .attr("d", d => line(d.values));
+    
+    // Stationary distribution reference lines
+    if (stationaryDist) {
+      g.selectAll(".ref-line")
+        .data(stationaryDist)
+        .enter().append("line")
+        .attr("class", "ref-line")
+        .attr("x1", 0)
+        .attr("x2", width)
+        .attr("y1", d => y(d))
+        .attr("y2", d => y(d))
+        .attr("stroke", "#6b7280")
+        .attr("stroke-dasharray", "3,3")
+        .style("opacity", 0.5);
+    }
+    
+    // Title
+    g.append("text")
+      .attr("x", width / 2)
+      .attr("y", -5)
+      .attr("text-anchor", "middle")
+      .style("font-size", "14px")
+      .style("font-weight", "bold")
+      .text("Convergence to Stationary Distribution");
+    
+  }, [vizType, convergenceData, matrixSize, stateNames, stationaryDist]);
+  
+  // Simulation
+  useEffect(() => {
+    if (!isSimulating) {
+      if (simulationRef.current) {
+        clearInterval(simulationRef.current);
+      }
+      return;
+    }
+    
+    simulationRef.current = setInterval(() => {
+      setCurrentState(prev => {
+        const probs = matrix[prev];
+        const rand = Math.random();
+        let cumSum = 0;
+        for (let i = 0; i < probs.length; i++) {
+          cumSum += probs[i];
+          if (rand < cumSum) {
+            setHistory(h => [...h.slice(-99), i]);
+            return i;
+          }
+        }
+        return prev;
+      });
+    }, simulationSpeed);
+    
+    return () => {
+      if (simulationRef.current) {
+        clearInterval(simulationRef.current);
+      }
+    };
+  }, [isSimulating, simulationSpeed, matrix]);
+  
+  // UI Functions
+  const loadPreset = useCallback((preset) => {
+    setMatrixSize(preset.size);
+    setStateNames(preset.states);
+    setMatrix(preset.matrix);
+    setCurrentState(0);
+    setHistory([0]);
+  }, []);
+  
+  const updateMatrix = useCallback((i, j, value) => {
+    const newMatrix = matrix.map(row => [...row]);
+    newMatrix[i][j] = Math.max(0, Math.min(1, parseFloat(value) || 0));
+    setMatrix(newMatrix);
+  }, [matrix]);
+  
+  const normalizeMatrix = useCallback(() => {
+    setMatrix(matrix.map(row => {
+      const sum = row.reduce((a, b) => a + b, 0);
+      return sum === 0 ? row : row.map(v => v / sum);
+    }));
+  }, [matrix]);
+  
+  const resizeMatrix = useCallback((newSize) => {
+    const size = Math.max(2, Math.min(8, newSize));
+    setMatrixSize(size);
+    
+    // Resize state names
+    const names = ["A", "B", "C", "D", "E", "F", "G", "H"];
+    setStateNames(names.slice(0, size));
+    
+    // Resize matrix
+    const newMatrix = Array(size).fill().map((_, i) => 
+      Array(size).fill().map((_, j) => 
+        matrix[i]?.[j] ?? (i === j ? 0.5 : 0.5 / (size - 1))
+      )
+    );
+    setMatrix(newMatrix.map(row => {
+      const sum = row.reduce((a, b) => a + b, 0);
+      return sum === 0 ? row : row.map(v => v / sum);
+    }));
+    
+    setCurrentState(0);
+    setHistory([0]);
+  }, [matrix]);
+  
+  return (
+    <div className="h-screen flex bg-gray-50">
+      {/* Left Panel - Tree */}
+      <div className="w-1/2 flex flex-col bg-white border-r border-gray-200">
+        {/* Header */}
+        <div className="px-4 py-3 border-b border-gray-200">
+          <h1 className="text-lg font-bold text-gray-900">Markov Chain Concept Map</h1>
+          
+          {/* Search */}
+          <div className="mt-2 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search concepts..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-10 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2"
+              >
+                <X className="w-4 h-4 text-gray-400" />
+              </button>
+            )}
+          </div>
+          
+          {/* Category filters */}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {Object.entries(GROUPS).map(([key, group]) => (
+              <button
+                key={key}
+                onClick={() => {
+                  setActiveGroups(prev => {
+                    const next = new Set(prev);
+                    if (next.has(key)) {
+                      next.delete(key);
+                    } else {
+                      next.add(key);
+                    }
+                    return next;
+                  });
+                }}
+                className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+                  activeGroups.has(key)
+                    ? 'text-white shadow-sm'
+                    : 'bg-gray-100 text-gray-500'
+                }`}
+                style={activeGroups.has(key) ? { backgroundColor: group.color } : {}}
+              >
+                {group.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        
+        {/* Tree Visualization */}
+        <div className="flex-1 relative">
+          <div ref={treeRef} className="w-full h-full" />
+          
+          {/* Selected Node Info */}
+          {selectedNode && (
+            <div className="absolute bottom-4 left-4 right-4 bg-white rounded-lg shadow-lg border border-gray-200 p-4">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="font-semibold text-gray-900">{selectedNode.name}</h3>
+                  <p className="text-sm text-gray-600 mt-1">{selectedNode.description}</p>
+                </div>
+                <span 
+                  className="px-2 py-1 rounded text-xs font-medium text-white"
+                  style={{ backgroundColor: GROUPS[selectedNode.group]?.color }}
+                >
+                  {GROUPS[selectedNode.group]?.label}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+      
+      {/* Right Panel - Interactive Visualizations */}
+      <div className="w-1/2 flex flex-col">
+        {/* Controls */}
+        <div className="bg-white border-b border-gray-200 p-4">
+          {/* Viz type selector */}
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex gap-2">
+              {[
+                { id: 'graph', icon: Network, label: 'Graph' },
+                { id: 'distribution', icon: BarChart3, label: 'Distribution' },
+                { id: 'convergence', icon: TrendingUp, label: 'Convergence' }
+              ].map(viz => (
+                <button
+                  key={viz.id}
+                  onClick={() => setVizType(viz.id)}
+                  className={`px-3 py-1.5 rounded-lg flex items-center gap-2 transition-colors ${
+                    vizType === viz.id
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'hover:bg-gray-100'
+                  }`}
+                >
+                  <viz.icon className="w-4 h-4" />
+                  <span className="text-sm font-medium">{viz.label}</span>
+                </button>
+              ))}
+            </div>
+            
+            {/* Simulation controls */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsSimulating(!isSimulating)}
+                className={`px-3 py-1.5 rounded-lg flex items-center gap-2 ${
+                  isSimulating ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'
+                }`}
+              >
+                {isSimulating ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                <span className="text-sm font-medium">
+                  {isSimulating ? 'Pause' : 'Simulate'}
+                </span>
+              </button>
+              <button
+                onClick={() => {
+                  setCurrentState(0);
+                  setHistory([0]);
+                }}
+                className="p-1.5 hover:bg-gray-100 rounded-lg"
+                title="Reset"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+          
+          {/* Presets */}
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-sm font-medium text-gray-700">Examples:</span>
+            {Object.entries(PRESETS).map(([key, preset]) => (
+              <button
+                key={key}
+                onClick={() => loadPreset(preset)}
+                className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                {preset.name}
+              </button>
+            ))}
+          </div>
+          
+          {/* Matrix Editor */}
+          <div className="border-t border-gray-200 pt-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-4">
+                <label className="text-sm font-medium text-gray-700">
+                  Size: {matrixSize}
+                </label>
+                <input
+                  type="range"
+                  min="2"
+                  max="6"
+                  value={matrixSize}
+                  onChange={(e) => resizeMatrix(parseInt(e.target.value))}
+                  className="w-32"
+                />
+              </div>
+              <button
+                onClick={normalizeMatrix}
+                className="px-3 py-1 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              >
+                Normalize
+              </button>
+            </div>
+            
+            {/* Matrix Input */}
+            <div className="overflow-auto max-h-32">
+              <table className="w-full">
+                <thead>
+                  <tr>
+                    <th className="w-8"></th>
+                    {stateNames.slice(0, matrixSize).map(name => (
+                      <th key={name} className="text-xs font-medium text-gray-600 px-1">
+                        {name}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {matrix.map((row, i) => (
+                    <tr key={i}>
+                      <td className="text-xs font-medium text-gray-600 px-1">
+                        {stateNames[i]}
+                      </td>
+                      {row.map((val, j) => (
+                        <td key={j} className="p-0.5">
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            max="1"
+                            value={val.toFixed(2)}
+                            onChange={(e) => updateMatrix(i, j, e.target.value)}
+                            className="w-full px-1 py-0.5 text-xs border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            
+            {/* Stats */}
+            <div className="mt-2 flex items-center justify-between text-xs">
+              <div className="text-gray-600">
+                Steps: {history.length} | Current: {stateNames[currentState]}
+              </div>
+              {stationaryDist && (
+                <div className="text-gray-600">
+                  π = [{stationaryDist.map(v => v.toFixed(3)).join(', ')}]
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+        
+        {/* Visualization Area */}
+        <div className="flex-1 p-4 bg-gray-50">
+          <div ref={vizRef} className="w-full h-full bg-white rounded-lg shadow-sm border border-gray-200" />
+        </div>
+      </div>
+    </div>
+  );
+}
