@@ -1,0 +1,861 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import * as d3 from "d3";
+
+/**
+ * Markov Chains Mindmap — Interactive (D3 + React + Tailwind)
+ *
+ * Features
+ * - Force-directed graph with zoom/pan + drag
+ * - Click a node to see definition + examples in the side panel
+ * - Search bar to locate nodes quickly (press Enter to focus)
+ * - Toggle category visibility
+ * - Fit-to-view button
+ *
+ * Usage: Exported as default React component, ready to preview.
+ */
+
+// -----------------------------
+// Data Model
+// -----------------------------
+
+/**
+ * Node groups (for coloring / filtering)
+ * - core
+ * - types
+ * - tools
+ * - extensions
+ * - applications
+ * - advanced
+ */
+
+const GROUPS = [
+  { id: "core", label: "Core" },
+  { id: "types", label: "Types" },
+  { id: "tools", label: "Analytical Tools" },
+  { id: "extensions", label: "Extensions" },
+  { id: "applications", label: "Applications" },
+  { id: "advanced", label: "Advanced Topics" },
+] as const;
+
+function colorForGroup(group) {
+  switch (group) {
+    case "core":
+      return "#2563eb"; // blue-600
+    case "types":
+      return "#7c3aed"; // violet-600
+    case "tools":
+      return "#ea580c"; // orange-600
+    case "extensions":
+      return "#16a34a"; // green-600
+    case "applications":
+      return "#ca8a04"; // yellow-600
+    case "advanced":
+      return "#dc2626"; // red-600
+    default:
+      return "#374151"; // gray-700
+  }
+}
+
+/**
+ * Define nodes with: id, title, group, definition, examples (array of bullets)
+ */
+const NODES = [
+  // Root
+  {
+    id: "root",
+    title: "Markov Chains",
+    group: "core",
+    definition:
+      "Stochastic processes with the Markov property: the next state depends only on the current state, not on the full past.",
+    examples: [
+      "Weather model: P(Rain|Today=Sunny) = 0.3",
+      "Board game piece moving between squares each turn",
+    ],
+  },
+
+  // Core concepts
+  {
+    id: "core_concepts",
+    title: "Core Concepts",
+    group: "core",
+    definition:
+      "States, transitions, transition matrix; basics that define a discrete-time Markov chain (DTMC).",
+    examples: ["States = {Sunny, Rainy}", "Transition matrix rows sum to 1"],
+  },
+  {
+    id: "markov_property",
+    title: "Markov Property",
+    group: "core",
+    definition:
+      "Conditional independence of the future from the past given the present state.",
+    examples: ["P(X_{t+1}|X_t, X_{t-1}, …) = P(X_{t+1}|X_t)"]
+  },
+  {
+    id: "states",
+    title: "States",
+    group: "core",
+    definition:
+      "The set of possible situations the system can be in.",
+    examples: ["{Bull, Bear}", "{Healthy, Sick}"]
+  },
+  {
+    id: "transitions",
+    title: "Transitions",
+    group: "core",
+    definition:
+      "Probabilities of moving from one state to another at a step.",
+    examples: ["From Sunny→Rainy with probability 0.3"]
+  },
+  {
+    id: "transition_matrix",
+    title: "Transition Matrix",
+    group: "core",
+    definition:
+      "Row-stochastic matrix whose (i,j) entry is P(next=j | current=i).",
+    examples: ["Each row sums to 1"]
+  },
+
+  // Types
+  {
+    id: "types",
+    title: "Types",
+    group: "types",
+    definition: "Ways to categorize Markov chains by state/time/properties.",
+    examples: ["DTMC vs CTMC", "Finite vs infinite"]
+  },
+  {
+    id: "finite",
+    title: "Finite State",
+    group: "types",
+    definition: "A Markov chain with a finite number of states.",
+    examples: ["6 squares in a simple game board"]
+  },
+  {
+    id: "infinite",
+    title: "Countable/Infinite",
+    group: "types",
+    definition: "State space is countably infinite or continuous.",
+    examples: ["Random walk on all integers"]
+  },
+  {
+    id: "dtmc",
+    title: "DTMC",
+    group: "types",
+    definition: "Discrete-Time Markov Chain: transitions happen at fixed steps.",
+    examples: ["Daily weather transitions"]
+  },
+  {
+    id: "ctmc",
+    title: "CTMC",
+    group: "types",
+    definition:
+      "Continuous-Time Markov Chain: transitions occur at random times with exponential holding times.",
+    examples: ["Customer service queue with arrival/service rates"]
+  },
+  {
+    id: "irreducible",
+    title: "Irreducible",
+    group: "types",
+    definition:
+      "Every state is reachable from every other state (communicates).",
+    examples: ["Random walk on a connected graph"]
+  },
+  {
+    id: "aperiodic",
+    title: "Aperiodic",
+    group: "types",
+    definition:
+      "Does not get trapped in cycles with fixed period; needed for convergence to stationary distribution in finite irreducible chains.",
+    examples: ["Random self-loops often ensure aperiodicity"]
+  },
+  {
+    id: "ergodic",
+    title: "Ergodic",
+    group: "types",
+    definition:
+      "Irreducible + aperiodic (finite case) ⇒ unique stationary distribution and convergence to it from any start.",
+    examples: ["Random walk on a non-bipartite, connected graph"]
+  },
+  {
+    id: "absorbing",
+    title: "Absorbing",
+    group: "types",
+    definition:
+      "Contains at least one absorbing state that, once entered, cannot be left.",
+    examples: ["Game over / bankruptcy state"]
+  },
+  {
+    id: "transient",
+    title: "Transient",
+    group: "types",
+    definition:
+      "A state that may be left and not necessarily revisited with probability 1.",
+    examples: ["High-volatility regime visited rarely"]
+  },
+  {
+    id: "recurrent",
+    title: "Recurrent",
+    group: "types",
+    definition:
+      "A state that is revisited with probability 1 eventually (infinite expected visits).",
+    examples: ["Simple symmetric random walk in 1D (null recurrent)"]
+  },
+
+  // Analytical tools
+  {
+    id: "tools",
+    title: "Analytical Tools",
+    group: "tools",
+    definition:
+      "Mathematical objects to study long-run behavior, absorption, and convergence.",
+    examples: ["Stationary distribution, eigenvalues, mixing time"]
+  },
+  {
+    id: "stationary",
+    title: "Stationary Distribution",
+    group: "tools",
+    definition:
+      "A probability vector π with π = πP (invariant under the transition).",
+    examples: ["PageRank as a stationary distribution on the web graph"]
+  },
+  {
+    id: "fundamental",
+    title: "Fundamental Matrix",
+    group: "tools",
+    definition:
+      "For absorbing chains, N = (I - Q)^{-1} yields expected visits and absorption probabilities.",
+    examples: ["Expected time to absorption in a chute-and-ladders variant"]
+  },
+  {
+    id: "mixing_time",
+    title: "Mixing Time",
+    group: "tools",
+    definition:
+      "Number of steps until the chain is close to stationary (in total variation).",
+    examples: ["Card shuffling needs ~7 riffles to mix"]
+  },
+  {
+    id: "eigen",
+    title: "Eigenvalues & Eigenvectors",
+    group: "tools",
+    definition:
+      "Spectral analysis of P explains convergence rates and modes.",
+    examples: ["Second-largest eigenvalue governs convergence speed"]
+  },
+  {
+    id: "reversibility",
+    title: "Reversibility (Detailed Balance)",
+    group: "tools",
+    definition:
+      "A chain is reversible w.r.t. π if π_i P_{ij} = π_j P_{ji}; simplifies analysis and used in MCMC.",
+    examples: ["Random walk on an undirected graph with degree-based π"]
+  },
+
+  // Extensions
+  {
+    id: "extensions",
+    title: "Extensions",
+    group: "extensions",
+    definition:
+      "Generalizations and related models that build on Markov structure.",
+    examples: ["MDP, HMM, MCMC, POMDP, Semi-Markov, SDEs"]
+  },
+  {
+    id: "mdp",
+    title: "MDP (Markov Decision Process)",
+    group: "extensions",
+    definition:
+      "States + actions + rewards + transition kernel; choose policies to maximize expected return.",
+    examples: ["Robot navigation; trading policy optimization"]
+  },
+  {
+    id: "hmm",
+    title: "HMM (Hidden Markov Model)",
+    group: "extensions",
+    definition:
+      "Hidden (latent) Markov chain generates observed emissions; two probability layers: transition + emission.",
+    examples: ["Speech recognition; market regime detection"]
+  },
+  {
+    id: "pomdp",
+    title: "POMDP",
+    group: "extensions",
+    definition:
+      "MDP with partial observability: maintain beliefs (distributions over states).",
+    examples: ["Poker; robotics with noisy sensors"]
+  },
+  {
+    id: "semi_markov",
+    title: "Semi-Markov",
+    group: "extensions",
+    definition:
+      "General holding-time distributions between transitions (not necessarily geometric/exponential).",
+    examples: ["Reliability modeling of machine lifetimes"]
+  },
+  {
+    id: "mcmc",
+    title: "MCMC",
+    group: "extensions",
+    definition:
+      "Construct a chain whose stationary distribution equals a target distribution to draw dependent samples.",
+    examples: ["Metropolis–Hastings, Gibbs sampling"]
+  },
+  {
+    id: "hmc",
+    title: "HMC (Hamiltonian Monte Carlo)",
+    group: "extensions",
+    definition:
+      "Leverages Hamiltonian dynamics to propose distant, high-acceptance moves in continuous spaces.",
+    examples: ["Stan probabilistic programming"]
+  },
+  {
+    id: "sdes",
+    title: "SDEs / Continuous-State",
+    group: "extensions",
+    definition:
+      "Markov processes in continuous time and state (e.g., solutions to stochastic differential equations).",
+    examples: ["Geometric Brownian motion for asset prices"]
+  },
+  {
+    id: "jump_process",
+    title: "Markov Jump Process",
+    group: "extensions",
+    definition:
+      "CTMC with discrete states and exponential waiting times; specified by a rate (generator) matrix.",
+    examples: ["Chemical reaction networks"]
+  },
+
+  // Applications
+  {
+    id: "applications",
+    title: "Applications",
+    group: "applications",
+    definition:
+      "Common fields where Markov models are practical.",
+    examples: ["Finance, Biology, Physics, AI/ML, OR"]
+  },
+  {
+    id: "finance",
+    title: "Finance",
+    group: "applications",
+    definition:
+      "Model regimes, credit ratings, and price dynamics with Markov structure.",
+    examples: ["Regime switching HMMs; credit rating migration matrices"]
+  },
+  {
+    id: "physics",
+    title: "Physics",
+    group: "applications",
+    definition:
+      "Random walks, statistical mechanics, and particle systems.",
+    examples: ["Ising model dynamics; diffusion"]
+  },
+  {
+    id: "biology",
+    title: "Biology",
+    group: "applications",
+    definition:
+      "Sequence models and population dynamics.",
+    examples: ["DNA/protein HMMs"]
+  },
+  {
+    id: "aiml",
+    title: "AI / ML",
+    group: "applications",
+    definition:
+      "Reinforcement learning, temporal sequence modeling, generative modeling.",
+    examples: ["Policy iteration; n-gram language models"]
+  },
+  {
+    id: "or",
+    title: "Operations Research",
+    group: "applications",
+    definition:
+      "Queueing systems, inventory control, reliability.",
+    examples: ["M/M/1 queues; maintenance policies"]
+  },
+
+  // Advanced topics
+  {
+    id: "advanced",
+    title: "Advanced Topics",
+    group: "advanced",
+    definition:
+      "Deeper properties and sophisticated constructions of Markov models.",
+    examples: ["Regime switching, hierarchical models, spectral gap"]
+  },
+  {
+    id: "regime_switch",
+    title: "Regime Switching",
+    group: "advanced",
+    definition:
+      "Multiple regimes with distinct dynamics; switching governed by a latent Markov chain.",
+    examples: ["Bull/Bear/Crash market phases"]
+  },
+  {
+    id: "hierarchical",
+    title: "Hierarchical Markov Models",
+    group: "advanced",
+    definition:
+      "Nested or multi-level Markov structures capturing dynamics at different scales.",
+    examples: ["Daily → intra-day transitions in markets"]
+  },
+  {
+    id: "bayesian",
+    title: "Bayesian Updating",
+    group: "advanced",
+    definition:
+      "Treat transition probabilities as uncertain; update posteriors with observed transitions.",
+    examples: ["Dirichlet priors on rows of P"]
+  },
+  {
+    id: "entropy",
+    title: "Entropy Rate",
+    group: "advanced",
+    definition:
+      "Asymptotic uncertainty per step; measures randomness of the chain.",
+    examples: ["Higher entropy in near-uniform transitions"]
+  },
+  {
+    id: "spectral_gap",
+    title: "Spectral Gap",
+    group: "advanced",
+    definition:
+      "1 - |λ₂| in finite chains; larger gap implies faster convergence to stationarity.",
+    examples: ["Expander graphs mix rapidly"]
+  },
+] as const;
+
+/**
+ * Edges (parent → child).
+ */
+const LINKS = [
+  // Root
+  ["root", "core_concepts"],
+  ["root", "types"],
+  ["root", "tools"],
+  ["root", "extensions"],
+  ["root", "applications"],
+  ["root", "advanced"],
+
+  // Core subtree
+  ["core_concepts", "markov_property"],
+  ["core_concepts", "states"],
+  ["core_concepts", "transitions"],
+  ["core_concepts", "transition_matrix"],
+
+  // Types subtree
+  ["types", "finite"],
+  ["types", "infinite"],
+  ["types", "dtmc"],
+  ["types", "ctmc"],
+  ["types", "irreducible"],
+  ["types", "aperiodic"],
+  ["types", "ergodic"],
+  ["types", "absorbing"],
+  ["types", "transient"],
+  ["types", "recurrent"],
+
+  // Tools subtree
+  ["tools", "stationary"],
+  ["tools", "fundamental"],
+  ["tools", "mixing_time"],
+  ["tools", "eigen"],
+  ["tools", "reversibility"],
+
+  // Extensions subtree
+  ["extensions", "mdp"],
+  ["extensions", "hmm"],
+  ["extensions", "pomdp"],
+  ["extensions", "semi_markov"],
+  ["extensions", "mcmc"],
+  ["extensions", "hmc"],
+  ["extensions", "sdes"],
+  ["extensions", "jump_process"],
+
+  // Applications subtree
+  ["applications", "finance"],
+  ["applications", "physics"],
+  ["applications", "biology"],
+  ["applications", "aiml"],
+  ["applications", "or"],
+
+  // Advanced subtree
+  ["advanced", "regime_switch"],
+  ["advanced", "hierarchical"],
+  ["advanced", "bayesian"],
+  ["advanced", "entropy"],
+  ["advanced", "spectral_gap"],
+] as const;
+
+// Quick id → node map
+const NODE_MAP = Object.fromEntries(NODES.map((n) => [n.id, n]));
+
+// -----------------------------
+// Utility Hooks
+// -----------------------------
+function useResizeObserver(ref) {
+  const [rect, setRect] = useState({ width: 800, height: 600 });
+  useEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const cr = entry.contentRect;
+        setRect({ width: cr.width, height: cr.height });
+      }
+    });
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, [ref]);
+  return rect;
+}
+
+// -----------------------------
+// Main Component
+// -----------------------------
+export default function MarkovMindmap() {
+  const containerRef = useRef(null);
+  const svgRef = useRef(null);
+  const gRef = useRef(null);
+  const { width, height } = useResizeObserver(containerRef);
+
+  const [selectedId, setSelectedId] = useState("root");
+  const [query, setQuery] = useState("");
+  const [visibleGroups, setVisibleGroups] = useState(() =>
+    Object.fromEntries(GROUPS.map((g) => [g.id, true]))
+  );
+
+  // Derived: search matches
+  const searchMatches = useMemo(() => {
+    if (!query.trim()) return new Set();
+    const q = query.toLowerCase();
+    return new Set(
+      NODES.filter((n) =>
+        [n.title, n.definition, ...(n.examples || [])]
+          .join(" \u0000 ")
+          .toLowerCase()
+          .includes(q)
+      ).map((n) => n.id)
+    );
+  }, [query]);
+
+  // D3 Simulation setup
+  useEffect(() => {
+    if (!svgRef.current) return;
+
+    const svg = d3.select(svgRef.current);
+    const g = d3.select(gRef.current);
+
+    // Clear previous contents (safe hot-reload)
+    g.selectAll("*").remove();
+
+    // Build graph data
+    const nodes = NODES.map((n) => ({ ...n }));
+    const links = LINKS.map(([s, t]) => ({ source: s, target: t }));
+
+    // Scales
+    const radius = d3.scaleSqrt().domain([0, 1]).range([12, 18]);
+
+    // Marker (arrowhead)
+    svg
+      .append("defs")
+      .append("marker")
+      .attr("id", "arrow")
+      .attr("viewBox", "0 -5 10 10")
+      .attr("refX", 18)
+      .attr("refY", 0)
+      .attr("markerWidth", 6)
+      .attr("markerHeight", 6)
+      .attr("orient", "auto")
+      .append("path")
+      .attr("d", "M0,-5L10,0L0,5")
+      .attr("fill", "#9ca3af");
+
+    // Links
+    const link = g
+      .append("g")
+      .attr("stroke", "#9ca3af")
+      .attr("stroke-opacity", 0.6)
+      .selectAll("line")
+      .data(links)
+      .enter()
+      .append("line")
+      .attr("stroke-width", 1.2)
+      .attr("marker-end", "url(#arrow)");
+
+    // Nodes
+    const node = g
+      .append("g")
+      .selectAll("g.node")
+      .data(nodes)
+      .enter()
+      .append("g")
+      .attr("class", "node cursor-pointer");
+
+    const circles = node
+      .append("circle")
+      .attr("r", (d) => (d.id === "root" ? 22 : radius(1)))
+      .attr("fill", (d) => colorForGroup(d.group))
+      .attr("stroke", "#111827")
+      .attr("stroke-width", 1.5)
+      .attr("opacity", (d) => (visibleGroups[d.group] ? 1 : 0.08))
+      .on("click", (_, d) => setSelectedId(d.id))
+      .on("mouseover", function () {
+        d3.select(this).attr("stroke-width", 2.5);
+      })
+      .on("mouseout", function () {
+        d3.select(this).attr("stroke-width", 1.5);
+      });
+
+    const labels = node
+      .append("text")
+      .text((d) => d.title)
+      .attr("x", 12)
+      .attr("y", 4)
+      .attr("font-size", 12)
+      .attr("font-family", "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, \"Apple Color Emoji\", \"Segoe UI Emoji\")")
+      .attr("fill", "#111827")
+      .attr("opacity", (d) => (visibleGroups[d.group] ? 1 : 0.15))
+      .attr("font-weight", (d) =>
+        selectedId === d.id || searchMatches.has(d.id) ? 700 : 500
+      );
+
+    // Dragging
+    node.call(
+      d3
+        .drag()
+        .on("start", (event, d) => {
+          if (!event.active) simulation.alphaTarget(0.3).restart();
+          d.fx = d.x;
+          d.fy = d.y;
+        })
+        .on("drag", (event, d) => {
+          d.fx = event.x;
+          d.fy = event.y;
+        })
+        .on("end", (event, d) => {
+          if (!event.active) simulation.alphaTarget(0);
+          d.fx = null;
+          d.fy = null;
+        })
+    );
+
+    // Simulation
+    const simulation = d3
+      .forceSimulation(nodes)
+      .force(
+        "link",
+        d3
+          .forceLink(links)
+          .id((d) => d.id)
+          .distance((l) => (l.source.id === "root" ? 140 : 90))
+          .strength(0.08)
+      )
+      .force("charge", d3.forceManyBody().strength(-180))
+      .force("center", d3.forceCenter(width / 2, height / 2))
+      .force("collide", d3.forceCollide().radius(40));
+
+    simulation.on("tick", () => {
+      link
+        .attr("x1", (d) => d.source.x)
+        .attr("y1", (d) => d.source.y)
+        .attr("x2", (d) => d.target.x)
+        .attr("y2", (d) => d.target.y);
+
+      node.attr("transform", (d) => `translate(${d.x},${d.y})`);
+
+      // Update emphasis for search/selection dynamically
+      circles.attr("stroke", (d) =>
+        selectedId === d.id ? "#111827" : searchMatches.has(d.id) ? "#111827" : "#111827"
+      );
+      circles.attr("stroke-width", (d) =>
+        selectedId === d.id || searchMatches.has(d.id) ? 3 : 1.5
+      );
+      circles.attr("opacity", (d) => (visibleGroups[d.group] ? 1 : 0.08));
+      labels
+        .attr("opacity", (d) => (visibleGroups[d.group] ? 1 : 0.15))
+        .attr("font-weight", (d) =>
+          selectedId === d.id || searchMatches.has(d.id) ? 700 : 500
+        );
+    });
+
+    // Zoom + pan
+    const zoom = d3
+      .zoom()
+      .scaleExtent([0.25, 3])
+      .on("zoom", (event) => {
+        g.attr("transform", event.transform);
+      });
+
+    svg.call(zoom);
+
+    // Fit-to-view helper
+    function fit() {
+      const bounds = g.node().getBBox();
+      const fullWidth = width;
+      const fullHeight = height;
+      const widthScale = fullWidth / bounds.width;
+      const heightScale = fullHeight / bounds.height;
+      const scale = Math.min(widthScale, heightScale) * 0.95;
+      const translateX =
+        fullWidth / 2 - (bounds.x + bounds.width / 2) * scale;
+      const translateY =
+        fullHeight / 2 - (bounds.y + bounds.height / 2) * scale;
+      svg
+        .transition()
+        .duration(600)
+        .call(zoom.transform, d3.zoomIdentity.translate(translateX, translateY).scale(scale));
+    }
+
+    // Expose fit on window for the button handler
+    // (simple pattern; avoids re-binding in React)
+    // @ts-ignore
+    window.__markov_fit_to_view__ = fit;
+
+    return () => {
+      simulation.stop();
+      // @ts-ignore
+      delete window.__markov_fit_to_view__;
+    };
+  }, [width, height, visibleGroups, selectedId, searchMatches]);
+
+  const selected = NODE_MAP[selectedId] || NODE_MAP["root"];
+
+  function handleSearchSubmit(e) {
+    e.preventDefault();
+    // If unique match, select it; else if root included, keep selection
+    const matches = [...searchMatches];
+    if (matches.length > 0) setSelectedId(matches[0]);
+  }
+
+  function toggleGroup(id) {
+    setVisibleGroups((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+
+  return (
+    <div className="w-full h-screen grid grid-cols-12 gap-4 p-4 bg-slate-50">
+      {/* Left: Controls + Graph */}
+      <div className="col-span-8 flex flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <form onSubmit={handleSearchSubmit} className="flex items-center gap-2">
+            <input
+              className="px-3 py-2 rounded-xl border border-slate-300 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400 bg-white"
+              type="text"
+              placeholder="Search nodes (title/definition/example)"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <button
+              type="submit"
+              className="px-3 py-2 rounded-xl bg-slate-900 text-white shadow hover:shadow-md"
+            >
+              Search
+            </button>
+          </form>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                // @ts-ignore
+                if (window.__markov_fit_to_view__) window.__markov_fit_to_view__();
+              }}
+              className="px-3 py-2 rounded-xl bg-slate-800 text-white shadow hover:shadow-md"
+            >
+              Fit to View
+            </button>
+            <button
+              onClick={() => setSelectedId("root")}
+              className="px-3 py-2 rounded-xl bg-white border border-slate-300 shadow-sm hover:shadow"
+            >
+              Center on Root
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          {GROUPS.map((g) => (
+            <label
+              key={g.id}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-2xl bg-white border border-slate-200 shadow-sm hover:shadow cursor-pointer select-none"
+            >
+              <input
+                type="checkbox"
+                checked={visibleGroups[g.id]}
+                onChange={() => toggleGroup(g.id)}
+              />
+              <span
+                className="inline-block w-3 h-3 rounded"
+                style={{ background: colorForGroup(g.id) }}
+              />
+              <span className="text-sm font-medium">{g.label}</span>
+            </label>
+          ))}
+        </div>
+
+        <div ref={containerRef} className="flex-1 rounded-2xl bg-white border border-slate-200 shadow-inner overflow-hidden">
+          <svg ref={svgRef} width={width} height={height} className="w-full h-full">
+            <g ref={gRef} />
+          </svg>
+        </div>
+      </div>
+
+      {/* Right: Details Panel */}
+      <div className="col-span-4">
+        <div className="sticky top-4 rounded-2xl bg-white border border-slate-200 shadow p-5">
+          <div className="flex items-start justify-between gap-3 mb-2">
+            <h2 className="text-xl font-semibold leading-tight">
+              {selected.title}
+            </h2>
+            <span
+              className="mt-1 inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold"
+              style={{ background: colorForGroup(selected.group), color: "white" }}
+            >
+              {GROUPS.find((g) => g.id === selected.group)?.label || selected.group}
+            </span>
+          </div>
+          <p className="text-slate-700 mb-3 whitespace-pre-line">{selected.definition}</p>
+
+          {selected.examples && selected.examples.length > 0 && (
+            <div className="mb-4">
+              <h3 className="font-medium text-slate-900 mb-1">Examples</h3>
+              <ul className="list-disc list-inside text-slate-700 space-y-1">
+                {selected.examples.map((ex, idx) => (
+                  <li key={idx}>{ex}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Quick nav to children */}
+          <ChildLinks parentId={selected.id} onSelect={setSelectedId} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChildLinks({ parentId, onSelect }) {
+  const children = useMemo(() => {
+    const ids = LINKS.filter(([s]) => s === parentId).map(([, t]) => t);
+    return ids.map((id) => NODE_MAP[id]).filter(Boolean);
+  }, [parentId]);
+
+  if (children.length === 0) return null;
+
+  return (
+    <div>
+      <h3 className="font-medium text-slate-900 mb-1">Explore Children</h3>
+      <div className="flex flex-wrap gap-2">
+        {children.map((c) => (
+          <button
+            key={c.id}
+            onClick={() => onSelect(c.id)}
+            className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm"
+          >
+            {c.title}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
