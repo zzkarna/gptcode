@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Markov Chain Visualizer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            text-align: center;
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .panel {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .panel h2 {
+            color: #764ba2;
+            margin-bottom: 15px;
+            font-size: 1.4em;
+            border-bottom: 2px solid #f0f0f0;
+            padding-bottom: 10px;
+        }
+
+        #canvas {
+            width: 100%;
+            height: 400px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            background: linear-gradient(145deg, #f5f5f5, #ffffff);
+        }
+
+        .matrix-container {
+            display: grid;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .matrix-row {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+
+        .matrix-input {
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 1em;
+            font-weight: 600;
+            background: white;
+            transition: all 0.3s ease;
+        }
+
+        .matrix-input:focus {
+            border-color: #667eea;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
+        }
+
+        .state-vector {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .state-prob {
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border-radius: 10px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 1.1em;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+            transition: transform 0.3s ease;
+        }
+
+        .state-prob:hover {
+            transform: translateY(-2px);
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .info-box {
+            background: linear-gradient(145deg, #f0f0ff, #ffffff);
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+            margin-top: 15px;
+        }
+
+        .info-box h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .step-display {
+            font-size: 1.2em;
+            font-weight: 600;
+            color: #764ba2;
+            margin-bottom: 10px;
+        }
+
+        .preset-buttons {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .preset-btn {
+            padding: 8px 16px;
+            background: linear-gradient(135deg, #48c774, #3ec46d);
+            font-size: 0.9em;
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .speed-control label {
+            font-weight: 600;
+            color: #666;
+        }
+
+        .speed-slider {
+            flex: 1;
+            height: 6px;
+            border-radius: 3px;
+            background: #e0e0e0;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        .speed-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            cursor: pointer;
+        }
+
+        .speed-slider::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            cursor: pointer;
+            border: none;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+
+        .active-state {
+            animation: pulse 0.5s ease-in-out;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎲 Markov Chain Visualizer</h1>
+        <p class="subtitle">Interactive demonstration of state vectors and transition matrices</p>
+
+        <div class="main-grid">
+            <div class="panel">
+                <h2>📊 State Diagram</h2>
+                <canvas id="canvas"></canvas>
+                <div class="info-box">
+                    <h3>Current State</h3>
+                    <div class="step-display">Step: <span id="stepCount">0</span></div>
+                    <div id="currentStateInfo">Click "Step" or "Run" to start the simulation</div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>🔢 Transition Matrix</h2>
+                <div class="preset-buttons">
+                    <button class="preset-btn" onclick="loadPreset('weather')">Weather Example</button>
+                    <button class="preset-btn" onclick="loadPreset('random')">Random Walk</button>
+                    <button class="preset-btn" onclick="loadPreset('absorbing')">Absorbing State</button>
+                </div>
+                <div class="matrix-container" id="matrixContainer">
+                    <!-- Matrix inputs will be generated here -->
+                </div>
+                <div class="info-box">
+                    <h3>Matrix Properties</h3>
+                    <div id="matrixInfo">Each row must sum to 1.0</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>📈 State Vector Evolution</h2>
+            <div class="state-vector" id="stateVector">
+                <!-- State probabilities will be displayed here -->
+            </div>
+            <div class="speed-control">
+                <label for="speedSlider">Animation Speed:</label>
+                <input type="range" id="speedSlider" class="speed-slider" min="100" max="2000" value="1000">
+                <span id="speedValue">1000ms</span>
+            </div>
+            <div class="controls">
+                <button onclick="resetSimulation()">🔄 Reset</button>
+                <button onclick="stepSimulation()">⏭️ Step</button>
+                <button onclick="toggleRun()" id="runBtn">▶️ Run</button>
+                <button onclick="randomizeMatrix()">🎲 Randomize</button>
+                <button onclick="normalizeMatrix()">✓ Normalize</button>
+            </div>
+            <div class="info-box">
+                <h3>How it works</h3>
+                <p>The state vector represents the probability distribution across all states. At each step, we multiply the current state vector by the transition matrix to get the next state vector. Over time, the system often converges to a steady-state distribution.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let animationId = null;
+        let isRunning = false;
+        let currentStep = 0;
+        let animationSpeed = 1000;
+
+        // State configuration
+        const states = ['State A', 'State B', 'State C'];
+        let stateVector = [1.0, 0.0, 0.0]; // Start in State A
+        let transitionMatrix = [
+            [0.5, 0.3, 0.2],
+            [0.2, 0.6, 0.2],
+            [0.3, 0.3, 0.4]
+        ];
+
+        // Visual configuration
+        const statePositions = [
+            { x: 0.25, y: 0.5 },
+            { x: 0.75, y: 0.3 },
+            { x: 0.75, y: 0.7 }
+        ];
+
+        function initCanvas() {
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+        }
+
+        function drawStates() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw transitions
+            for (let i = 0; i < states.length; i++) {
+                for (let j = 0; j < states.length; j++) {
+                    const prob = transitionMatrix[i][j];
+                    if (prob > 0.01) {
+                        drawTransition(i, j, prob);
+                    }
+                }
+            }
+            
+            // Draw states
+            for (let i = 0; i < states.length; i++) {
+                const pos = statePositions[i];
+                const x = pos.x * canvas.width;
+                const y = pos.y * canvas.height;
+                const radius = 40 + stateVector[i] * 30;
+                
+                // State circle
+                ctx.beginPath();
+                ctx.arc(x, y, radius, 0, 2 * Math.PI);
+                const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+                gradient.addColorStop(0, `rgba(102, 126, 234, ${0.3 + stateVector[i] * 0.7})`);
+                gradient.addColorStop(1, `rgba(118, 75, 162, ${0.3 + stateVector[i] * 0.7})`);
+                ctx.fillStyle = gradient;
+                ctx.fill();
+                ctx.strokeStyle = '#667eea';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+                
+                // State label
+                ctx.fillStyle = '#333';
+                ctx.font = 'bold 16px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(states[i], x, y - 5);
+                
+                // Probability
+                ctx.font = '14px Arial';
+                ctx.fillText(stateVector[i].toFixed(3), x, y + 15);
+            }
+        }
+
+        function drawTransition(from, to, probability) {
+            const fromPos = statePositions[from];
+            const toPos = statePositions[to];
+            const x1 = fromPos.x * canvas.width;
+            const y1 = fromPos.y * canvas.height;
+            const x2 = toPos.x * canvas.width;
+            const y2 = toPos.y * canvas.height;
+            
+            ctx.strokeStyle = `rgba(102, 126, 234, ${0.2 + probability * 0.8})`;
+            ctx.lineWidth = 1 + probability * 4;
+            
+            if (from === to) {
+                // Self-loop
+                ctx.beginPath();
+                ctx.arc(x1 - 50, y1, 30, 0, 2 * Math.PI);
+                ctx.stroke();
+                
+                // Probability label
+                ctx.fillStyle = '#666';
+                ctx.font = '12px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(probability.toFixed(2), x1 - 80, y1);
+            } else {
+                // Arrow
+                const angle = Math.atan2(y2 - y1, x2 - x1);
+                const startX = x1 + Math.cos(angle) * 45;
+                const startY = y1 + Math.sin(angle) * 45;
+                const endX = x2 - Math.cos(angle) * 45;
+                const endY = y2 - Math.sin(angle) * 45;
+                
+                ctx.beginPath();
+                ctx.moveTo(startX, startY);
+                ctx.lineTo(endX, endY);
+                ctx.stroke();
+                
+                // Arrowhead
+                const headLength = 10;
+                ctx.beginPath();
+                ctx.moveTo(endX, endY);
+                ctx.lineTo(endX - headLength * Math.cos(angle - Math.PI / 6),
+                          endY - headLength * Math.sin(angle - Math.PI / 6));
+                ctx.moveTo(endX, endY);
+                ctx.lineTo(endX - headLength * Math.cos(angle + Math.PI / 6),
+                          endY - headLength * Math.sin(angle + Math.PI / 6));
+                ctx.stroke();
+                
+                // Probability label
+                const midX = (startX + endX) / 2;
+                const midY = (startY + endY) / 2;
+                ctx.fillStyle = '#666';
+                ctx.font = '12px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(probability.toFixed(2), midX + 10, midY - 10);
+            }
+        }
+
+        function initMatrixInputs() {
+            const container = document.getElementById('matrixContainer');
+            container.innerHTML = '';
+            
+            for (let i = 0; i < 3; i++) {
+                const row = document.createElement('div');
+                row.className = 'matrix-row';
+                
+                for (let j = 0; j < 3; j++) {
+                    const input = document.createElement('input');
+                    input.type = 'number';
+                    input.className = 'matrix-input';
+                    input.value = transitionMatrix[i][j].toFixed(2);
+                    input.step = '0.01';
+                    input.min = '0';
+                    input.max = '1';
+                    input.id = `matrix-${i}-${j}`;
+                    input.onchange = updateMatrix;
+                    row.appendChild(input);
+                }
+                
+                container.appendChild(row);
+            }
+        }
+
+        function updateMatrix() {
+            for (let i = 0; i < 3; i++) {
+                for (let j = 0; j < 3; j++) {
+                    const input = document.getElementById(`matrix-${i}-${j}`);
+                    transitionMatrix[i][j] = parseFloat(input.value) || 0;
+                }
+            }
+            checkMatrixValidity();
+            drawStates();
+        }
+
+        function checkMatrixValidity() {
+            const info = document.getElementById('matrixInfo');
+            let valid = true;
+            let message = '';
+            
+            for (let i = 0; i < 3; i++) {
+                const rowSum = transitionMatrix[i].reduce((a, b) => a + b, 0);
+                if (Math.abs(rowSum - 1.0) > 0.01) {
+                    valid = false;
+                    message += `Row ${i + 1} sums to ${rowSum.toFixed(2)} (should be 1.0)<br>`;
+                }
+            }
+            
+            if (valid) {
+                info.innerHTML = '✅ Matrix is valid (all rows sum to 1.0)';
+                info.style.color = 'green';
+            } else {
+                info.innerHTML = '⚠️ ' + message;
+                info.style.color = 'orange';
+            }
+        }
+
+        function updateStateVectorDisplay() {
+            const container = document.getElementById('stateVector');
+            container.innerHTML = '';
+            
+            for (let i = 0; i < states.length; i++) {
+                const div = document.createElement('div');
+                div.className = 'state-prob';
+                div.innerHTML = `${states[i]}<br>${stateVector[i].toFixed(4)}`;
+                if (stateVector[i] === Math.max(...stateVector)) {
+                    div.classList.add('active-state');
+                }
+                container.appendChild(div);
+            }
+        }
+
+        function stepSimulation() {
+            // Matrix multiplication: new_state = current_state * transition_matrix
+            const newStateVector = [0, 0, 0];
+            
+            for (let j = 0; j < 3; j++) {
+                for (let i = 0; i < 3; i++) {
+                    newStateVector[j] += stateVector[i] * transitionMatrix[i][j];
+                }
+            }
+            
+            stateVector = newStateVector;
+            currentStep++;
+            
+            document.getElementById('stepCount').textContent = currentStep;
+            updateStateVectorDisplay();
+            drawStates();
+            
+            // Update current state info
+            const maxProb = Math.max(...stateVector);
+            const currentState = states[stateVector.indexOf(maxProb)];
+            document.getElementById('currentStateInfo').innerHTML = 
+                `Most likely state: <strong>${currentState}</strong> (${(maxProb * 100).toFixed(1)}%)`;
+        }
+
+        function resetSimulation() {
+            stateVector = [1.0, 0.0, 0.0];
+            currentStep = 0;
+            isRunning = false;
+            document.getElementById('runBtn').textContent = '▶️ Run';
+            document.getElementById('stepCount').textContent = '0';
+            document.getElementById('currentStateInfo').textContent = 'Click "Step" or "Run" to start the simulation';
+            updateStateVectorDisplay();
+            drawStates();
+        }
+
+        function toggleRun() {
+            isRunning = !isRunning;
+            const btn = document.getElementById('runBtn');
+            btn.textContent = isRunning ? '⏸️ Pause' : '▶️ Run';
+            
+            if (isRunning) {
+                runSimulation();
+            }
+        }
+
+        function runSimulation() {
+            if (!isRunning) return;
+            
+            stepSimulation();
+            setTimeout(runSimulation, animationSpeed);
+        }
+
+        function randomizeMatrix() {
+            for (let i = 0; i < 3; i++) {
+                let rowSum = 0;
+                const row = [];
+                
+                for (let j = 0; j < 3; j++) {
+                    row[j] = Math.random();
+                    rowSum += row[j];
+                }
+                
+                // Normalize row
+                for (let j = 0; j < 3; j++) {
+                    transitionMatrix[i][j] = row[j] / rowSum;
+                    document.getElementById(`matrix-${i}-${j}`).value = transitionMatrix[i][j].toFixed(2);
+                }
+            }
+            
+            checkMatrixValidity();
+            drawStates();
+        }
+
+        function normalizeMatrix() {
+            for (let i = 0; i < 3; i++) {
+                const rowSum = transitionMatrix[i].reduce((a, b) => a + b, 0);
+                if (rowSum > 0) {
+                    for (let j = 0; j < 3; j++) {
+                        transitionMatrix[i][j] = transitionMatrix[i][j] / rowSum;
+                        document.getElementById(`matrix-${i}-${j}`).value = transitionMatrix[i][j].toFixed(2);
+                    }
+                }
+            }
+            
+            checkMatrixValidity();
+            drawStates();
+        }
+
+        function loadPreset(type) {
+            if (type === 'weather') {
+                // Weather model: Sunny, Cloudy, Rainy
+                transitionMatrix = [
+                    [0.7, 0.2, 0.1],  // Sunny -> Sunny, Cloudy, Rainy
+                    [0.3, 0.4, 0.3],  // Cloudy -> Sunny, Cloudy, Rainy
+                    [0.2, 0.3, 0.5]   // Rainy -> Sunny, Cloudy, Rainy
+                ];
+            } else if (type === 'random') {
+                // Random walk with slight bias
+                transitionMatrix = [
+                    [0.33, 0.33, 0.34],
+                    [0.33, 0.34, 0.33],
+                    [0.34, 0.33, 0.33]
+                ];
+            } else if (type === 'absorbing') {
+                // State C is absorbing
+                transitionMatrix = [
+                    [0.5, 0.3, 0.2],
+                    [0.0, 0.7, 0.3],
+                    [0.0, 0.0, 1.0]
+                ];
+            }
+            
+            // Update inputs
+            for (let i = 0; i < 3; i++) {
+                for (let j = 0; j < 3; j++) {
+                    document.getElementById(`matrix-${i}-${j}`).value = transitionMatrix[i][j].toFixed(2);
+                }
+            }
+            
+            resetSimulation();
+            checkMatrixValidity();
+            drawStates();
+        }
+
+        // Speed control
+        document.getElementById('speedSlider').addEventListener('input', function(e) {
+            animationSpeed = parseInt(e.target.value);
+            document.getElementById('speedValue').textContent = animationSpeed + 'ms';
+        });
+
+        // Initialize
+        window.addEventListener('resize', () => {
+            initCanvas();
+            drawStates();
+        });
+
+        initCanvas();
+        initMatrixInputs();
+        updateStateVectorDisplay();
+        checkMatrixValidity();
+        drawStates();
+    </script>
+</body>
+</html>
